@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Served at domain root on Vercel/Netlify, so base is "/".
+// Relative base ("./") so assets load whether served from a domain root
+// (Firebase Hosting: qs-workspace-5ddbd.web.app) or a sub-path (GitHub Pages).
 export default defineConfig({
-  base: "/",
+  base: "./",
   plugins: [react()],
 });
