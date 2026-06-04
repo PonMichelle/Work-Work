@@ -15,9 +15,10 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npm run build
-      - name: Write service account key
-        run: printf '%s' '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /home/runner/sa.json
       - name: Deploy hosting + Firestore rules
-        run: npx --yes firebase-tools@latest deploy --only hosting,firestore:rules --project qs-workspace-5ddbd --non-interactive
+        uses: w9jds/firebase-action@master
+        with:
+          args: deploy --only hosting,firestore:rules
         env:
-          GOOGLE_APPLICATION_CREDENTIALS: /home/runner/sa.json
+          GCP_SA_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PROJECT_ID: qs-workspace-5ddbd
