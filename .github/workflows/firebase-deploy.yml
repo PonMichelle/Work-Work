@@ -15,9 +15,9 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npm run build
-      - uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          channelId: live
-          projectId: qs-workspace-5ddbd
+      - name: Write service account key
+        run: printf '%s' '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /home/runner/sa.json
+      - name: Deploy hosting + Firestore rules
+        run: npx --yes firebase-tools@latest deploy --only hosting,firestore:rules --project qs-workspace-5ddbd --non-interactive
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /home/runner/sa.json
