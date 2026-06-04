@@ -60,7 +60,7 @@ export default function App(){
   const [expBur,setExpBur]=useState(null);
   const [burSearch,setBurSearch]=useState("");
   const [sortBy,setSortBy]=useState("code"); const [sortDir,setSortDir]=useState(1);
-  const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("cat_master");
+  const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("");
   const [costModal,setCostModal]=useState(null);
   const [cType,setCType]=useState("subcon");
   const [cForm,setCForm]=useState({supplier:"",rate:"",date:"",note:""});
@@ -110,6 +110,8 @@ export default function App(){
 
   useEffect(()=>{ if(!ready)return; const ref=doc(db,"meta","codes"); return onSnapshot(ref,s=>{ if(s.exists())setCodes(s.data().list||[]); else{setCodes(DEF_CODES);setDoc(ref,{list:DEF_CODES}).catch(()=>{});} }); },[ready]);
   useEffect(()=>{ if(!ready)return; const ref=doc(db,"meta","cats"); return onSnapshot(ref,s=>{ if(s.exists())setCats(s.data().list||[]); else{setCats(DEF_CATS);setDoc(ref,{list:DEF_CATS}).catch(()=>{});} }); },[ready]);
+  // Keep the selected category valid when the category list changes (e.g. after loading the master list).
+  useEffect(()=>{ if(cats.length&&!cats.some(c=>c.id===selCat))setSelCat(cats[0].id); },[cats]); // eslint-disable-line
   useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","log"),s=>{ const e=s.exists()?(s.data().entries||[]):[]; logRef.current=e; setLog(e); }); },[ready]);
 
   // Current project's BOQ
@@ -144,10 +146,19 @@ export default function App(){
   const setBurField=(id,patch)=>{ setBurItems(prev=>prev.map(b=>b.id===id?{...b,...patch}:b)); updateDoc(doc(db,"bur",id),patch).catch(()=>{}); };
 
   const loadMaster=useCallback(async()=>{
-    if(burItems.some(b=>b.catId==="cat_master")&&!confirm(`This adds the ${burSeed.length}-item master list to the SHARED library for everyone. Continue?`))return;
-    toast_("⏳ Loading master list to shared library…");
-    try{ let batch=writeBatch(db),n=0; for(const it of burSeed){ const ref=doc(collection(db,"bur")); const {id,...rest}=it; batch.set(ref,rest); n++; if(n%400===0){await batch.commit();batch=writeBatch(db);} } await batch.commit(); setSelCat("cat_master"); addLogEntry(`Loaded ${burSeed.length} master BUR items`); toast_(`✅ Loaded ${burSeed.length} master items (shared)`); }
-    catch(e){ toast_("⚠️ Load failed: "+e.message); }
+    if(!confirm(`Replace the entire BUR library with the master list?\n\nThis clears the current ${burItems.length} item(s) and loads ${burSeed.items.length} fresh items filed under their ${burSeed.cats.length} categories (from the Excel). Use this to reset / remove duplicates.`))return;
+    toast_("⏳ Loading master list (replacing all)…");
+    try{
+      // 1) clear existing BUR docs (fixes duplicates)
+      for(let i=0;i<burItems.length;i+=400){ const batch=writeBatch(db); burItems.slice(i,i+400).forEach(b=>batch.delete(doc(db,"bur",b.id))); await batch.commit(); }
+      // 2) set categories from the Excel (column A)
+      await setDoc(doc(db,"meta","cats"),{list:burSeed.cats});
+      // 3) write the items
+      for(let i=0;i<burSeed.items.length;i+=400){ const batch=writeBatch(db); burSeed.items.slice(i,i+400).forEach(it=>{ const {id,...rest}=it; batch.set(doc(collection(db,"bur")),rest); }); await batch.commit(); }
+      if(burSeed.cats[0])setSelCat(burSeed.cats[0].id);
+      addLogEntry(`Loaded master list: ${burSeed.items.length} items in ${burSeed.cats.length} categories`);
+      toast_(`✅ Loaded ${burSeed.items.length} items into ${burSeed.cats.length} categories`);
+    }catch(e){ toast_("⚠️ Load failed: "+e.message); }
   },[burItems,toast_,addLogEntry]);
 
   // Auto-sort BUR items into the standard categories by keyword; unmatched → Others. User can move any item after.
@@ -263,7 +274,7 @@ export default function App(){
   const gt=gTot(); const tot=data.sections.reduce((a,s)=>a+(s.items?.length||0),0)||0;
   const vcols=ALL_COLS.filter(c=>visCols.has(c.id));
   const cc=cSum();
-  const displayCats=cats.some(c=>c.id==="cat_master")?cats:[MASTER_CAT,...cats];
+  const displayCats=cats;
   const catName=id=>displayCats.find(c=>c.id===id)?.name||id;
   const BUR_MAX=200; const _q=burSearch.trim().toLowerCase();
   const _allCat=burItems.filter(b=>b.catId===selCat);
@@ -407,8 +418,7 @@ export default function App(){
               <input value={burSearch} onChange={e=>setBurSearch(e.target.value)} placeholder="🔍 Search code or description…" style={{flex:1,minWidth:200,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none"}}/>
               {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
               <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
-              <button onClick={loadMaster} style={{background:"#1e3a5f",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⬇ Load master list ({burSeed.length})</button>
-              <button onClick={categorizeMaster} style={{background:"#16a34a",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>🗂 Auto-sort to categories</button>
+              <button onClick={loadMaster} style={{background:"#1e3a5f",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⬇ Load master list ({burSeed.items.length})</button>
             </div>
 
             {/* Sortable column header */}
