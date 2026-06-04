@@ -15,10 +15,15 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npm run build
+      - name: Base64-encode the service account key (action expects base64)
+        run: |
+          B64=$(printf '%s' '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' | base64 -w 0)
+          echo "::add-mask::$B64"
+          echo "GCP_SA_KEY_B64=$B64" >> "$GITHUB_ENV"
       - name: Deploy hosting + Firestore rules
         uses: w9jds/firebase-action@master
         with:
           args: deploy --only hosting,firestore:rules
         env:
-          GCP_SA_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GCP_SA_KEY: ${{ env.GCP_SA_KEY_B64 }}
           PROJECT_ID: qs-workspace-5ddbd
