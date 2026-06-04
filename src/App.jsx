@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import burSeed from "./burSeed.json"; // master BUR list imported from BUR.xlsx
 
 const SECTIONS=[{id:"prelim",name:"Preliminaries"},{id:"building",name:"Building Works"},{id:"external",name:"External Works"},{id:"mande",name:"M&E Works"},{id:"fees",name:"Professional Fees"}];
 const UNITS=["m²","m³","m","nr","sum","lot","kg","t","m run","%","item"];
@@ -10,6 +11,7 @@ const ALL_COLS=[{id:"ref",label:"Ref",w:48},{id:"desc",label:"Description",w:190
 const DEF_COLS=new Set(["ref","desc","unit","qty","rA","amtA","rB","amtB","code","status","remarks","by"]);
 const DEF_CODES=[{id:"dc1",code:"PRELIM",desc:"Preliminaries",cat:"Prelim"},{id:"dc2",code:"BLDG-A",desc:"Building Works Phase A",cat:"Building"},{id:"dc3",code:"BLDG-B",desc:"Building Works Phase B",cat:"Building"},{id:"dc4",code:"EXT-A",desc:"External Works Phase A",cat:"External"},{id:"dc5",code:"EXT-B",desc:"External Works Phase B",cat:"External"},{id:"dc6",code:"ME-ACMV",desc:"Air Conditioning & Mech Ventilation",cat:"M&E"},{id:"dc7",code:"ME-ELV",desc:"Electrical & Low Voltage",cat:"M&E"},{id:"dc8",code:"ME-FP",desc:"Fire Protection",cat:"M&E"},{id:"dc9",code:"ME-STP",desc:"Sewage Treatment Plant",cat:"M&E"},{id:"dc10",code:"FEES",desc:"Professional Fees",cat:"Fees"}];
 const DEF_CATS=["Concrete Works","Formwork","Reinforcement","Brickwork & Blockwork","Waterproofing","Structural Steelwork","Floor & Wall Finishes","Roofing","Doors, Windows & Glazing","External Works","M&E Works","Preliminaries","Others"].map((name,i)=>({id:`cat${i+1}`,name}));
+const MASTER_CAT={id:"cat_master",name:"Master BUR"};
 const COMPS=["labour","material","plant","subcon"];
 const CLABEL={labour:"Labour",material:"Material",plant:"Plant",subcon:"Subcon / Supplier"};
 
@@ -31,6 +33,8 @@ export default function App(){
   const [burItems,setBurItems]=useState([]);
   const [selCat,setSelCat]=useState(DEF_CATS[0].id);
   const [expBur,setExpBur]=useState(null);
+  const [burSearch,setBurSearch]=useState("");
+  const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("cat_master");
   const [costModal,setCostModal]=useState(null);
   const [cType,setCType]=useState("subcon");
   const [cForm,setCForm]=useState({supplier:"",rate:"",date:"",note:""});
@@ -129,6 +133,35 @@ export default function App(){
   const updBur=useCallback((id,ch)=>pushBur(burItems.map(b=>b.id===id?{...b,...ch}:b)),[burItems,pushBur]);
   const delBur=useCallback(id=>{if(confirm("Delete this BUR item?"))pushBur(burItems.filter(b=>b.id!==id));},[burItems,pushBur]);
 
+  // Load the bundled master list (from BUR.xlsx) into the "Master BUR" category, replacing any prior master items.
+  const loadMaster=useCallback(()=>{
+    if(burItems.some(b=>b.catId==="cat_master")&&!confirm("Reload master list? This replaces the current Master BUR items."))return;
+    const others=burItems.filter(b=>b.catId!=="cat_master");
+    pushBur([...burSeed,...others]);
+    setSelCat("cat_master");
+    toast_(`✅ Loaded ${burSeed.length} master items with historical sub-con quotes`);
+  },[burItems,pushBur,toast_]);
+
+  // Import tab-separated rows pasted from Excel: columns = Description, Unit, Code, Rate.
+  const importPaste=useCallback(()=>{
+    const lines=pasteText.split(/\r?\n/).filter(l=>l.trim()!=="");
+    if(!lines.length){toast_("⚠️ Nothing to paste");return;}
+    const first=lines[0].split("\t").map(s=>s.trim().toLowerCase());
+    const start=(first[0]==="description"||first.includes("code"))?1:0;
+    const newItems=[];
+    for(let i=start;i<lines.length;i++){
+      const c=lines[i].split("\t");
+      const desc=(c[0]||"").trim(),unit=(c[1]||"").trim(),code=(c[2]||"").trim();
+      const rate=parseFloat(String(c[3]||"").replace(/[^0-9.\-]/g,""))||0;
+      if(!desc&&!code)continue;
+      newItems.push({id:uid(),catId:pasteCat,code,desc:desc||"(no description)",unit:unit||"sum",labour:0,material:rate,plant:0,subcon:0,oh:0,profit:0,costData:[],quote:null,group:"Pasted"});
+    }
+    if(!newItems.length){toast_("⚠️ No rows parsed — expected columns: Description, Unit, Code, Rate");return;}
+    pushBur([...newItems,...burItems]);
+    setPasteOpen(false);setPasteText("");setSelCat(pasteCat);
+    toast_(`✅ Imported ${newItems.length} items`);
+  },[pasteText,pasteCat,burItems,pushBur,toast_]);
+
   // Cost data ops
   const modalItem=costModal?burItems.find(b=>b.id===costModal):null;
   const costEntries=modalItem?(modalItem.costData||[]).filter(e=>e.component===cType):[];
@@ -190,7 +223,15 @@ export default function App(){
   const cs=data?.sections.find(s=>s.id===selSec);
   const gt=gTot(); const tot=data?.sections.reduce((a,s)=>a+(s.items?.length||0),0)||0;
   const vcols=ALL_COLS.filter(c=>visCols.has(c.id));
-  const cc=cSum(); const catItems=burItems.filter(b=>b.catId===selCat);
+  const cc=cSum();
+  const displayCats=cats.some(c=>c.id==="cat_master")?cats:[MASTER_CAT,...cats];
+  const catName=id=>displayCats.find(c=>c.id===id)?.name||id;
+  const BUR_MAX=200; // cap rendered rows for performance; search to narrow
+  const _q=burSearch.trim().toLowerCase();
+  const _allCat=burItems.filter(b=>b.catId===selCat);
+  const _filtered=_q?_allCat.filter(b=>(b.code||"").toLowerCase().includes(_q)||(b.desc||"").toLowerCase().includes(_q)):_allCat;
+  const catTotal=_filtered.length;
+  const catItems=_filtered.slice(0,BUR_MAX);
 
   return(
     <div style={{minHeight:"100vh",background:"#f1f5f9",display:"flex",flexDirection:"column",fontFamily:"system-ui,sans-serif"}}>
@@ -299,7 +340,7 @@ export default function App(){
             {/* Category pills */}
             <div style={{display:"flex",gap:6,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
               <div style={{display:"flex",gap:6,overflowX:"auto",flex:1,paddingBottom:2}}>
-                {cats.map(c=><button key={c.id} onClick={()=>setSelCat(c.id)} style={{padding:"6px 12px",borderRadius:20,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,background:selCat===c.id?"#1e3a5f":"#fff",color:selCat===c.id?"#fff":"#475569",boxShadow:"0 1px 3px rgba(0,0,0,.1)"}}>{c.name}<span style={{opacity:.6,fontSize:10,marginLeft:4}}>({burItems.filter(b=>b.catId===c.id).length})</span></button>)}
+                {displayCats.map(c=><button key={c.id} onClick={()=>setSelCat(c.id)} style={{padding:"6px 12px",borderRadius:20,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,background:selCat===c.id?"#1e3a5f":"#fff",color:selCat===c.id?"#fff":"#475569",boxShadow:"0 1px 3px rgba(0,0,0,.1)"}}>{c.name}<span style={{opacity:.6,fontSize:10,marginLeft:4}}>({burItems.filter(b=>b.catId===c.id).length})</span></button>)}
               </div>
               {showNewCat?(
                 <div style={{display:"flex",gap:4,flexShrink:0}}>
@@ -310,8 +351,16 @@ export default function App(){
               ):<button onClick={()=>setShowNewCat(true)} style={{background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:20,padding:"5px 12px",fontSize:11,cursor:"pointer",color:"#475569",fontWeight:600,whiteSpace:"nowrap",flexShrink:0}}>+ Category</button>}
             </div>
 
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{cats.find(c=>c.id===selCat)?.name} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catItems.length} items</span></span>
+            {/* Search + import toolbar */}
+            <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
+              <input value={burSearch} onChange={e=>setBurSearch(e.target.value)} placeholder="🔍 Search code or description…" style={{flex:1,minWidth:200,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none"}}/>
+              {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
+              <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
+              <button onClick={loadMaster} style={{background:"#1e3a5f",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⬇ Load master list ({burSeed.length})</button>
+            </div>
+
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
+              <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{catName(selCat)} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catTotal} items{catItems.length<catTotal?` (showing first ${catItems.length} — refine search)`:""}</span></span>
               <button onClick={()=>addBurItem(selCat)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Item</button>
             </div>
 
@@ -336,6 +385,7 @@ export default function App(){
                         <span style={{fontSize:12,color:isExp?"#2563eb":"#cbd5e1",flexShrink:0}}>{isExp?"▼":"▶"}</span>
                         <div style={{flex:1,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",minWidth:0}}>
                           <span style={{fontWeight:800,fontSize:12,background:"#eff6ff",color:"#1d4ed8",padding:"2px 8px",borderRadius:5,flexShrink:0,fontFamily:"monospace"}}>{item.code||"—"}</span>
+                          {item.group&&<span style={{fontSize:10,color:"#94a3b8",flexShrink:0,fontStyle:"italic"}}>{item.group}</span>}
                           <span style={{fontSize:13,fontWeight:500,color:"#1e293b",flex:1,minWidth:100}}>{item.desc}</span>
                           <span style={{fontSize:11,color:"#94a3b8",flexShrink:0}}>{item.unit}</span>
                           <div style={{display:"flex",gap:8,fontSize:11,flexShrink:0,flexWrap:"wrap"}}>
@@ -536,6 +586,32 @@ export default function App(){
         )}
 
       </div>
+
+      {/* ══ PASTE-FROM-EXCEL MODAL ══ */}
+      {pasteOpen&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:680,maxHeight:"88vh",display:"flex",flexDirection:"column",boxShadow:"0 25px 60px rgba(0,0,0,.3)"}}>
+            <div style={{padding:"16px 20px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div style={{fontWeight:700,fontSize:15,color:"#1e293b"}}>📋 Paste from Excel</div>
+              <button onClick={()=>setPasteOpen(false)} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,cursor:"pointer",color:"#64748b",fontWeight:600}}>Close ✕</button>
+            </div>
+            <div style={{padding:"16px 20px",overflow:"auto"}}>
+              <div style={{fontSize:12,color:"#475569",marginBottom:8}}>In Excel, select cells in <b>4 columns in this order: Description · Unit · Code · Rate</b>, copy, then paste below. A header row is auto-detected and skipped.</div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+                <label style={{fontSize:12,color:"#475569"}}>Import into category:</label>
+                <select value={pasteCat} onChange={e=>setPasteCat(e.target.value)} style={{border:"1.5px solid #e2e8f0",borderRadius:7,padding:"6px 10px",fontSize:12,outline:"none",background:"#fff"}}>
+                  {displayCats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <textarea value={pasteText} onChange={e=>setPasteText(e.target.value)} placeholder={"Acoustic Ceiling Panel AC1\tm2\tAcousticCeilingPanel_C1\t130.50\n…"} style={{width:"100%",height:220,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"10px 12px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box",resize:"vertical"}}/>
+              <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:12}}>
+                <button onClick={()=>{setPasteText("");}} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"8px 14px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>
+                <button onClick={importPaste} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"8px 20px",fontSize:12,cursor:"pointer",fontWeight:600}}>Import</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ══ COST DATA MODAL ══ */}
       {costModal&&modalItem&&(
