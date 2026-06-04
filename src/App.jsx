@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { auth, db } from "./firebase";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
 import burSeed from "./burSeed.json"; // master BUR list imported from BUR.xlsx
 
 const SECTIONS=[{id:"prelim",name:"Preliminaries"},{id:"building",name:"Building Works"},{id:"external",name:"External Works"},{id:"mande",name:"M&E Works"},{id:"fees",name:"Professional Fees"}];
@@ -15,16 +18,23 @@ const MASTER_CAT={id:"cat_master",name:"Master BUR"};
 const COMPS=["labour","material","plant","subcon"];
 const CLABEL={labour:"Labour",material:"Material",plant:"Plant",subcon:"Subcon / Supplier"};
 
-const initData=()=>({sections:SECTIONS.map(s=>({...s,items:[]})),ts:0});
+const newSections=()=>SECTIONS.map(s=>({...s,items:[]}));
 const fmt=n=>(n||0).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFractionDigits:2});
 const uid=()=>"_"+Math.random().toString(36).slice(2,10);
 const bTot=b=>{const d=(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0),oh=d*(+b.oh||0)/100,s=d+oh;return s*(1+(+b.profit||0)/100);};
+const authErrMsg=e=>{const c=(e&&e.code)||"";if(c.includes("invalid-cred")||c.includes("wrong-password")||c.includes("user-not-found"))return"Incorrect email or password.";if(c.includes("invalid-email"))return"That doesn't look like a valid email.";if(c.includes("too-many"))return"Too many attempts — try again later.";if(c.includes("network"))return"Network error — check your connection.";return"Sign-in failed. "+(e&&e.message||"");};
 
 export default function App(){
-  const [user,setUser]=useState(null);
+  const [authUser,setAuthUser]=useState(undefined); // undefined=loading, null=signed out, object=signed in
+  const [profile,setProfile]=useState(null);         // {name,role,email}
+  const [email,setEmail]=useState(""); const [pw,setPw]=useState(""); const [authErr,setAuthErr]=useState(""); const [authBusy,setAuthBusy]=useState(false);
   const [nameIn,setNameIn]=useState(""); const [roleIn,setRoleIn]=useState("Estimator");
+
+  const [projects,setProjects]=useState(null);        // null=loading, []=none
+  const [pid,setPid]=useState(null);
+
   const [tab,setTab]=useState("boq");
-  const [data,setData]=useState(null);
+  const [data,setData]=useState(null);                // current project's BOQ: {sections, ts}
   const [selSec,setSelSec]=useState("prelim");
   const [visCols,setVisCols]=useState(DEF_COLS);
   const [showColPick,setShowColPick]=useState(false);
@@ -43,157 +53,116 @@ export default function App(){
   const [editCId,setEditCId]=useState(null); const [codeForm,setCodeForm]=useState({code:"",desc:"",cat:""}); const [showAddC,setShowAddC]=useState(false);
   const [rbu,setRbu]=useState({labour:"",material:"",plant:"",subcon:"",oh:15,profit:10});
   const [log,setLog]=useState([]);
-  const [loading,setLoading]=useState(true);
-  const [toast,setToast]=useState(null); const [synced,setSynced]=useState(null);
+  const [toast,setToast]=useState(null);
 
-  const tsRef=useRef(0); const sTimer=useRef(null); const uRef=useRef(null); const pollRef=useRef(null);
-  const dirtyRef=useRef(false);   // true while a local BOQ edit is pending save — blocks remote overwrite
-  const logRef=useRef([]);        // always-current log for use inside debounced/async callbacks
-  const pendingRef=useRef(null);  // latest BOQ snapshot awaiting flush
-  useEffect(()=>{uRef.current=user;},[user]);
-  useEffect(()=>{logRef.current=log;},[log]);
+  const sTimer=useRef(null); const uRef=useRef(null); const pidRef=useRef(null); const dirtyRef=useRef(false); const pendingRef=useRef(null); const logRef=useRef([]); const burTimers=useRef({});
+  const user=authUser&&profile?{uid:authUser.uid,email:authUser.email,name:profile.name,role:profile.role}:null;
+  useEffect(()=>{uRef.current=user;});
+  useEffect(()=>{pidRef.current=pid;},[pid]);
   const toast_=useCallback(msg=>{setToast(msg);setTimeout(()=>setToast(null),3500);},[]);
+  const ready=!!authUser&&!!profile;
 
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  useEffect(()=>onAuthStateChanged(auth,u=>setAuthUser(u||null)),[]);
+  useEffect(()=>{
+    if(!authUser){setProfile(null);return;}
+    return onSnapshot(doc(db,"users",authUser.uid),s=>setProfile(s.exists()?s.data():null),()=>setProfile(null));
+  },[authUser]);
+
+  const doLogin=async()=>{
+    if(!email.trim()||!pw)return; setAuthBusy(true);setAuthErr("");
+    try{await signInWithEmailAndPassword(auth,email.trim(),pw);}catch(e){setAuthErr(authErrMsg(e));}
+    setAuthBusy(false);
+  };
+  const saveProfile=async()=>{ if(!nameIn.trim()||!authUser)return; try{await setDoc(doc(db,"users",authUser.uid),{name:nameIn.trim(),role:roleIn,email:authUser.email});}catch(e){toast_("⚠️ "+e.message);} };
+
+  // ── Activity log ────────────────────────────────────────────────────────────
   const addLogEntry=useCallback(async action=>{
-    if(!action||!uRef.current)return logRef.current;
-    const e={id:uid(),user:uRef.current.name,role:uRef.current.role,action,time:new Date().toLocaleTimeString("en-SG")};
-    const nl=[e,...logRef.current].slice(0,60); logRef.current=nl; setLog(nl);
-    try{await window.storage.set("qs-log-v8",JSON.stringify(nl),true);}catch{}
-    return nl;
+    if(!action||!uRef.current)return;
+    const e={id:uid(),user:uRef.current.name,role:uRef.current.role,action,time:new Date().toLocaleString("en-SG")};
+    const nl=[e,...logRef.current].slice(0,80); logRef.current=nl; setLog(nl);
+    try{await setDoc(doc(db,"meta","log"),{entries:nl});}catch{}
   },[]);
 
-  const loadAll=useCallback(async silent=>{
-    try{
-      let d,c,bi,ct,l;
-      try{const r=await window.storage.get("qs-boq-v8",true);d=r?JSON.parse(r.value):null;}catch{}
-      try{const r=await window.storage.get("qs-codes-v8",true);c=r?JSON.parse(r.value):null;}catch{}
-      try{const r=await window.storage.get("qs-bur-v8",true);bi=r?JSON.parse(r.value):null;}catch{}
-      try{const r=await window.storage.get("qs-cats-v8",true);ct=r?JSON.parse(r.value):null;}catch{}
-      try{const r=await window.storage.get("qs-log-v8",true);l=r?JSON.parse(r.value):null;}catch{}
-      // Skip applying remote BOQ while the user has an unsaved local edit, else polling clobbers their typing.
-      if(d&&!dirtyRef.current){if(!silent&&tsRef.current&&d.ts!==tsRef.current)toast_("📡 Updated by team member");tsRef.current=d.ts;setData(d);}
-      else if(!d&&!dirtyRef.current&&!pendingRef.current)setData(initData());
-      if(c)setCodes(c); if(bi)setBurItems(bi); if(ct)setCats(ct); if(l){logRef.current=l;setLog(l);}
-      setSynced(new Date());
-    }catch{} setLoading(false);
-  },[toast_]);
+  // ── Live subscriptions (projects, BUR library, codes, cats, log) ────────────
+  useEffect(()=>{ if(!ready)return; return onSnapshot(collection(db,"projects"),snap=>{
+    const list=snap.docs.map(d=>({id:d.id,name:d.data().name||"Untitled",createdAt:d.data().createdAt||0})).sort((a,b)=>a.createdAt-b.createdAt);
+    setProjects(list); setPid(p=>p||(list[0]?list[0].id:null));
+  }); },[ready]);
 
-  useEffect(()=>{if(!user)return;loadAll(true);pollRef.current=setInterval(()=>loadAll(true),5000);return()=>clearInterval(pollRef.current);},[user,loadAll]);
+  useEffect(()=>{ if(!ready)return; return onSnapshot(collection(db,"bur"),snap=>setBurItems(snap.docs.map(d=>({id:d.id,...d.data()})))); },[ready]);
 
-  const pushData=useCallback(async(nd,action)=>{
-    nd.ts=Date.now();tsRef.current=nd.ts;dirtyRef.current=true;pendingRef.current=nd;setData({...nd});
-    if(sTimer.current)clearTimeout(sTimer.current);
-    sTimer.current=setTimeout(async()=>{
-      try{await window.storage.set("qs-boq-v8",JSON.stringify(nd),true);}catch{}
-      dirtyRef.current=false;pendingRef.current=null;
-      if(action)await addLogEntry(action);
-    },600);
-  },[addLogEntry]);
+  useEffect(()=>{ if(!ready)return; const ref=doc(db,"meta","codes"); return onSnapshot(ref,s=>{ if(s.exists())setCodes(s.data().list||[]); else{setCodes(DEF_CODES);setDoc(ref,{list:DEF_CODES}).catch(()=>{});} }); },[ready]);
+  useEffect(()=>{ if(!ready)return; const ref=doc(db,"meta","cats"); return onSnapshot(ref,s=>{ if(s.exists())setCats(s.data().list||[]); else{setCats(DEF_CATS);setDoc(ref,{list:DEF_CATS}).catch(()=>{});} }); },[ready]);
+  useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","log"),s=>{ const e=s.exists()?(s.data().entries||[]):[]; logRef.current=e; setLog(e); }); },[ready]);
 
-  // BOQ ops
-  const addItem=useCallback(sid=>{const nd=JSON.parse(JSON.stringify(data));const sec=nd.sections.find(s=>s.id===sid);if(sec){sec.items.push({id:uid(),ref:"",desc:"New item",unit:"sum",qty:1,rA:0,rB:0,code:"",status:"Draft",remarks:"",by:uRef.current?.name});pushData(nd,`Added item in ${sec.name}`);}},[data,pushData]);
+  // Current project's BOQ
+  useEffect(()=>{ if(!ready||!pid){setData(null);return;} return onSnapshot(doc(db,"projects",pid),s=>{ if(!s.exists())return; if(dirtyRef.current)return; const d=s.data(); setData({sections:d.sections||newSections(),ts:d.ts||0}); }); },[ready,pid]);
 
-  // Single debounced save path for edits — updates state, marks dirty, then flushes + logs once.
+  // ── Project ops ─────────────────────────────────────────────────────────────
+  const createProject=async()=>{ const name=prompt("New project / tender name:"); if(!name||!name.trim())return; const ref=doc(collection(db,"projects")); try{ await setDoc(ref,{name:name.trim(),createdAt:Date.now(),sections:newSections(),ts:Date.now()}); setPid(ref.id); setTab("boq"); addLogEntry(`Created project "${name.trim()}"`);}catch(e){toast_("⚠️ "+e.message);} };
+  const renameProject=async()=>{ const cur=projects?.find(p=>p.id===pid); const name=prompt("Rename project:",cur?.name||""); if(!name||!name.trim())return; try{await updateDoc(doc(db,"projects",pid),{name:name.trim()});}catch(e){toast_("⚠️ "+e.message);} };
+  const deleteProject=async()=>{ if(!pid)return; const cur=projects?.find(p=>p.id===pid); if(!confirm(`Delete project "${cur?.name}" and all its BOQ items? This cannot be undone.`))return; try{await deleteDoc(doc(db,"projects",pid)); setPid(null);}catch(e){toast_("⚠️ "+e.message);} };
+
+  // ── BOQ writes ──────────────────────────────────────────────────────────────
+  const writeProject=nd=>{ if(!pidRef.current)return; setDoc(doc(db,"projects",pidRef.current),{sections:nd.sections,ts:Date.now()},{merge:true}).catch(()=>{}); };
+  const pushData=useCallback((nd,action)=>{ dirtyRef.current=false; setData({...nd}); writeProject(nd); if(action)addLogEntry(action); },[addLogEntry]);
+
+  const addItem=useCallback(sid=>{ if(!data)return; const nd=JSON.parse(JSON.stringify(data)); const sec=nd.sections.find(s=>s.id===sid); if(sec){sec.items.push({id:uid(),ref:"",desc:"New item",unit:"sum",qty:1,rA:0,rB:0,code:"",status:"Draft",remarks:"",by:uRef.current?.name}); pushData(nd,`Added item in ${sec.name}`);} },[data,pushData]);
+
   const updItem=useCallback((sid,iid,ch)=>{
-    dirtyRef.current=true;
-    let secName;
-    setData(prev=>{
-      if(!prev)return prev;
-      const nd=JSON.parse(JSON.stringify(prev));
-      const sec=nd.sections.find(s=>s.id===sid);
-      const item=sec?.items.find(i=>i.id===iid);
-      if(item)Object.assign(item,ch,{by:uRef.current?.name});
-      nd.ts=Date.now();tsRef.current=nd.ts;
-      secName=sec?.name;pendingRef.current=nd;
-      return nd;
-    });
+    dirtyRef.current=true; let secName;
+    setData(prev=>{ if(!prev)return prev; const nd=JSON.parse(JSON.stringify(prev)); const sec=nd.sections.find(s=>s.id===sid); const item=sec?.items.find(i=>i.id===iid); if(item)Object.assign(item,ch,{by:uRef.current?.name}); secName=sec?.name; pendingRef.current=nd; return nd; });
     if(sTimer.current)clearTimeout(sTimer.current);
-    sTimer.current=setTimeout(async()=>{
-      const nd=pendingRef.current; if(!nd)return;
-      try{await window.storage.set("qs-boq-v8",JSON.stringify(nd),true);}catch{}
-      dirtyRef.current=false;pendingRef.current=null;
-      await addLogEntry(`Edited item in ${secName||"BOQ"}`);
-    },700);
+    sTimer.current=setTimeout(()=>{ const nd=pendingRef.current; if(nd){ writeProject(nd); dirtyRef.current=false; addLogEntry(`Edited item in ${secName||"BOQ"}`);} },700);
   },[addLogEntry]);
 
-  const delItem=useCallback((sid,iid)=>{const nd=JSON.parse(JSON.stringify(data));const sec=nd.sections.find(s=>s.id===sid);const item=sec?.items.find(i=>i.id===iid);if(sec&&item){sec.items=sec.items.filter(i=>i.id!==iid);pushData(nd,`Deleted item in ${sec.name}`);}},[data,pushData]);
+  const delItem=useCallback((sid,iid)=>{ if(!data)return; const nd=JSON.parse(JSON.stringify(data)); const sec=nd.sections.find(s=>s.id===sid); const item=sec?.items.find(i=>i.id===iid); if(sec&&item){ sec.items=sec.items.filter(i=>i.id!==iid); pushData(nd,`Deleted item in ${sec.name}`);} },[data,pushData]);
 
-  // Blur only triggers the BUR rate suggestion now — the value itself was already persisted by updItem,
-  // so we no longer re-clone + re-push the whole dataset (which used to bump ts and spam teammates).
-  const blurSave=useCallback((sid,iid,code)=>{
-    if(code){const match=burItems.find(b=>b.code&&b.code.toLowerCase()===code.toLowerCase());if(match&&bTot(match)>0)setRateSugg({secId:sid,iid,rate:bTot(match),code:match.code,desc:match.desc});}
-  },[burItems]);
+  const blurSave=useCallback((sid,iid,code)=>{ if(code){const m=burItems.find(b=>b.code&&b.code.toLowerCase()===code.toLowerCase()); if(m&&bTot(m)>0)setRateSugg({secId:sid,iid,rate:bTot(m),code:m.code,desc:m.desc});} },[burItems]);
 
-  // BUR ops
-  const pushCodes=useCallback(async nc=>{setCodes(nc);try{await window.storage.set("qs-codes-v8",JSON.stringify(nc),true);}catch{}},[]);
-  const pushBur=useCallback(async nb=>{setBurItems(nb);try{await window.storage.set("qs-bur-v8",JSON.stringify(nb),true);}catch{}},[]);
-  const pushCats=useCallback(async nc=>{setCats(nc);try{await window.storage.set("qs-cats-v8",JSON.stringify(nc),true);}catch{}},[]);
+  // ── BUR writes (per-document in shared library) ─────────────────────────────
+  const addBurItem=useCallback(async catId=>{ const ref=doc(collection(db,"bur")); try{ await setDoc(ref,{catId,code:"",desc:"New Item",unit:"sum",labour:0,material:0,plant:0,subcon:0,oh:15,profit:10,costData:[],quote:null,group:""}); setExpBur(ref.id);}catch(e){toast_("⚠️ "+e.message);} },[]);
+  const updBur=useCallback((id,ch)=>{ setBurItems(prev=>prev.map(b=>b.id===id?{...b,...ch}:b)); if(burTimers.current[id])clearTimeout(burTimers.current[id]); burTimers.current[id]=setTimeout(()=>updateDoc(doc(db,"bur",id),ch).catch(()=>{}),600); },[]);
+  const delBur=useCallback(id=>{ if(confirm("Delete this BUR item?"))deleteDoc(doc(db,"bur",id)).catch(()=>{}); },[]);
+  const setBurField=(id,patch)=>{ setBurItems(prev=>prev.map(b=>b.id===id?{...b,...patch}:b)); updateDoc(doc(db,"bur",id),patch).catch(()=>{}); };
 
-  const addBurItem=useCallback(catId=>{const ni={id:uid(),catId,code:"",desc:"New Item",unit:"sum",labour:0,material:0,plant:0,subcon:0,oh:15,profit:10,costData:[],quote:null};pushBur([ni,...burItems]);setExpBur(ni.id);},[burItems,pushBur]);
-  const updBur=useCallback((id,ch)=>pushBur(burItems.map(b=>b.id===id?{...b,...ch}:b)),[burItems,pushBur]);
-  const delBur=useCallback(id=>{if(confirm("Delete this BUR item?"))pushBur(burItems.filter(b=>b.id!==id));},[burItems,pushBur]);
+  const loadMaster=useCallback(async()=>{
+    if(burItems.some(b=>b.catId==="cat_master")&&!confirm(`This adds the ${burSeed.length}-item master list to the SHARED library for everyone. Continue?`))return;
+    toast_("⏳ Loading master list to shared library…");
+    try{ let batch=writeBatch(db),n=0; for(const it of burSeed){ const ref=doc(collection(db,"bur")); const {id,...rest}=it; batch.set(ref,rest); n++; if(n%400===0){await batch.commit();batch=writeBatch(db);} } await batch.commit(); setSelCat("cat_master"); addLogEntry(`Loaded ${burSeed.length} master BUR items`); toast_(`✅ Loaded ${burSeed.length} master items (shared)`); }
+    catch(e){ toast_("⚠️ Load failed: "+e.message); }
+  },[burItems,toast_,addLogEntry]);
 
-  // Load the bundled master list (from BUR.xlsx) into the "Master BUR" category, replacing any prior master items.
-  const loadMaster=useCallback(()=>{
-    if(burItems.some(b=>b.catId==="cat_master")&&!confirm("Reload master list? This replaces the current Master BUR items."))return;
-    const others=burItems.filter(b=>b.catId!=="cat_master");
-    pushBur([...burSeed,...others]);
-    setSelCat("cat_master");
-    toast_(`✅ Loaded ${burSeed.length} master items with historical sub-con quotes`);
-  },[burItems,pushBur,toast_]);
-
-  // Import tab-separated rows pasted from Excel: columns = Description, Unit, Code, Rate.
-  const importPaste=useCallback(()=>{
+  const importPaste=useCallback(async()=>{
     const lines=pasteText.split(/\r?\n/).filter(l=>l.trim()!=="");
     if(!lines.length){toast_("⚠️ Nothing to paste");return;}
     const first=lines[0].split("\t").map(s=>s.trim().toLowerCase());
     const start=(first[0]==="description"||first.includes("code"))?1:0;
-    const newItems=[];
-    for(let i=start;i<lines.length;i++){
-      const c=lines[i].split("\t");
-      const desc=(c[0]||"").trim(),unit=(c[1]||"").trim(),code=(c[2]||"").trim();
-      const rate=parseFloat(String(c[3]||"").replace(/[^0-9.\-]/g,""))||0;
-      if(!desc&&!code)continue;
-      newItems.push({id:uid(),catId:pasteCat,code,desc:desc||"(no description)",unit:unit||"sum",labour:0,material:rate,plant:0,subcon:0,oh:0,profit:0,costData:[],quote:null,group:"Pasted"});
-    }
-    if(!newItems.length){toast_("⚠️ No rows parsed — expected columns: Description, Unit, Code, Rate");return;}
-    pushBur([...newItems,...burItems]);
-    setPasteOpen(false);setPasteText("");setSelCat(pasteCat);
-    toast_(`✅ Imported ${newItems.length} items`);
-  },[pasteText,pasteCat,burItems,pushBur,toast_]);
+    const rows=[];
+    for(let i=start;i<lines.length;i++){ const c=lines[i].split("\t"); const desc=(c[0]||"").trim(),unit=(c[1]||"").trim(),code=(c[2]||"").trim(); const rate=parseFloat(String(c[3]||"").replace(/[^0-9.\-]/g,""))||0; if(!desc&&!code)continue; rows.push({catId:pasteCat,code,desc:desc||"(no description)",unit:unit||"sum",labour:0,material:rate,plant:0,subcon:0,oh:0,profit:0,costData:[],quote:null,group:"Pasted"}); }
+    if(!rows.length){toast_("⚠️ No rows parsed — expected: Description, Unit, Code, Rate");return;}
+    try{ let batch=writeBatch(db),n=0; for(const r of rows){ batch.set(doc(collection(db,"bur")),r); n++; if(n%400===0){await batch.commit();batch=writeBatch(db);} } await batch.commit(); setPasteOpen(false);setPasteText("");setSelCat(pasteCat); toast_(`✅ Imported ${rows.length} items`);}catch(e){toast_("⚠️ "+e.message);}
+  },[pasteText,pasteCat,toast_]);
 
-  // Cost data ops
+  // ── Cost data / quotes ──────────────────────────────────────────────────────
   const modalItem=costModal?burItems.find(b=>b.id===costModal):null;
   const costEntries=modalItem?(modalItem.costData||[]).filter(e=>e.component===cType):[];
 
-  const addCostEntry=useCallback(()=>{
-    if(!cForm.supplier||!cForm.rate){toast_("⚠️ Enter supplier and rate");return;}
-    const entry={id:uid(),component:cType,supplier:cForm.supplier,rate:+cForm.rate,date:cForm.date,note:cForm.note};
-    pushBur(burItems.map(b=>b.id===costModal?{...b,costData:[...(b.costData||[]),entry]}:b));
-    setCForm({supplier:"",rate:"",date:"",note:""}); toast_("✅ Entry added");
-  },[cType,cForm,costModal,burItems,pushBur,toast_]);
+  const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!cForm.rate){toast_("⚠️ Enter supplier and rate");return;} const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:+cForm.rate,date:cForm.date,note:cForm.note}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",note:""}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
+  const delCostEntry=useCallback(eid=>{ const b=burItems.find(x=>x.id===costModal); if(!b)return; setBurField(costModal,{costData:(b.costData||[]).filter(e=>e.id!==eid)}); },[costModal,burItems]);
+  const useCostEntry=useCallback(entry=>{ setBurField(costModal,{subcon:entry.rate,quote:{supplier:entry.supplier,rate:entry.rate,date:entry.date||"",note:entry.note||"",status:"pending",approvedBy:null,approvedAt:null}}); toast_("🟡 Rate set as Sub-Con Quotation — pending Lead QS approval"); },[costModal]);
+  const approveQuote=useCallback(id=>{ if(!uRef.current)return; const b=burItems.find(x=>x.id===id); if(!b||!b.quote)return; setBurField(id,{quote:{...b.quote,status:"approved",approvedBy:uRef.current.name,approvedAt:new Date().toLocaleString("en-SG")}}); toast_(`✅ Approved by ${uRef.current.name}`); },[burItems]);
+  const rejectQuote=useCallback(id=>{ setBurField(id,{subcon:0,quote:null}); toast_("🔴 Quote rejected and cleared"); },[]);
 
-  const delCostEntry=useCallback(eid=>pushBur(burItems.map(b=>b.id===costModal?{...b,costData:(b.costData||[]).filter(e=>e.id!==eid)}:b)),[costModal,burItems,pushBur]);
+  // ── Codes & cats ──────────────────────────────────────────────────────────
+  const pushCodes=async nc=>{ setCodes(nc); try{await setDoc(doc(db,"meta","codes"),{list:nc});}catch{} };
+  const pushCats=async nc=>{ setCats(nc); try{await setDoc(doc(db,"meta","cats"),{list:nc});}catch{} };
+  const saveNewCode=()=>{ if(!codeForm.code.trim())return; pushCodes([...codes,{id:uid(),...codeForm}]); setCodeForm({code:"",desc:"",cat:""}); setShowAddC(false); toast_("✅ Code added"); };
+  const saveEditCode=()=>{ pushCodes(codes.map(c=>c.id===editCId?{...c,...codeForm}:c)); setEditCId(null); toast_("✅ Updated"); };
+  const delCode=id=>{ if(confirm("Delete?"))pushCodes(codes.filter(c=>c.id!==id)); };
 
-  const useCostEntry=useCallback(entry=>{
-    pushBur(burItems.map(b=>b.id===costModal?{...b,subcon:entry.rate,quote:{supplier:entry.supplier,rate:entry.rate,date:entry.date,note:entry.note,status:"pending",approvedBy:null,approvedAt:null}}:b));
-    toast_("🟡 Rate set as Sub-Con Quotation — pending Lead QS approval");
-  },[costModal,burItems,pushBur,toast_]);
-
-  const approveQuote=useCallback(id=>{
-    if(!uRef.current)return;
-    pushBur(burItems.map(b=>b.id===id&&b.quote?{...b,quote:{...b.quote,status:"approved",approvedBy:uRef.current.name,approvedAt:new Date().toLocaleString("en-SG")}}:b));
-    toast_(`✅ Approved by ${uRef.current.name}`);
-  },[burItems,pushBur,toast_]);
-
-  const rejectQuote=useCallback(id=>{pushBur(burItems.map(b=>b.id===id?{...b,subcon:0,quote:null}:b));toast_("🔴 Quote rejected and cleared");},[burItems,pushBur,toast_]);
-
-  // Codes
-  const saveNewCode=()=>{if(!codeForm.code.trim())return;pushCodes([...codes,{id:uid(),...codeForm}]);setCodeForm({code:"",desc:"",cat:""});setShowAddC(false);toast_("✅ Code added");};
-  const saveEditCode=()=>{pushCodes(codes.map(c=>c.id===editCId?{...c,...codeForm}:c));setEditCId(null);toast_("✅ Updated");};
-  const delCode=id=>{if(confirm("Delete?"))pushCodes(codes.filter(c=>c.id!==id));};
-
-  // Calcs
+  // ── Calcs ─────────────────────────────────────────────────────────────────
   const aA=i=>(i.qty||0)*(i.rA||0); const aB=i=>(i.qty||0)*(i.rB||0);
   const sTot=id=>{const s=data?.sections.find(x=>x.id===id);return{A:s?.items?.reduce((t,i)=>t+aA(i),0)||0,B:s?.items?.reduce((t,i)=>t+aB(i),0)||0};};
   const gTot=()=>data?.sections.reduce((a,s)=>{const t=sTot(s.id);return{A:a.A+t.A,B:a.B+t.B};},{A:0,B:0})||{A:0,B:0};
@@ -201,48 +170,92 @@ export default function App(){
   const rb=(()=>{const l=+rbu.labour||0,m=+rbu.material||0,p=+rbu.plant||0,s=+rbu.subcon||0,d=l+m+p+s,oh=d*(+rbu.oh||0)/100,sub=d+oh,pr=sub*(+rbu.profit||0)/100;return{d,oh,sub,pr,total:sub+pr};})();
   const toggleCol=id=>{const s=new Set(visCols);s.has(id)?s.delete(id):s.add(id);setVisCols(s);};
 
-  if(!user)return(
-    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#1e3a5f,#2563eb)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+  // ── Gates: loading / login / profile / no-project ───────────────────────────
+  const splash=msg=>(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12,color:"#64748b",fontFamily:"system-ui,sans-serif"}}><div style={{fontSize:36}}>🏗️</div><div>{msg}</div></div>);
+
+  if(authUser===undefined)return splash("Loading…");
+
+  if(!authUser)return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#1e3a5f,#2563eb)",display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"system-ui,sans-serif"}}>
       <div style={{background:"#fff",borderRadius:20,padding:32,width:"100%",maxWidth:360,boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
         <div style={{textAlign:"center",marginBottom:24}}>
           <div style={{fontSize:52,marginBottom:8}}>🏗️</div>
           <h1 style={{fontSize:22,fontWeight:700,color:"#1e293b",margin:0}}>QS Workspace</h1>
-          <p style={{fontSize:13,color:"#64748b",marginTop:6}}>Collaborative Quantity Surveying</p>
+          <p style={{fontSize:13,color:"#64748b",marginTop:6}}>Sign in to continue</p>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
-          <input style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none"}} placeholder="Your name" value={nameIn} onChange={e=>setNameIn(e.target.value)} onKeyDown={e=>e.key==="Enter"&&nameIn.trim()&&setUser({name:nameIn.trim(),role:roleIn})}/>
-          <select style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none",background:"#fff"}} value={roleIn} onChange={e=>setRoleIn(e.target.value)}>{ROLES.map(r=><option key={r}>{r}</option>)}</select>
-          <button style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:600,cursor:"pointer"}} onClick={()=>nameIn.trim()&&setUser({name:nameIn.trim(),role:roleIn})}>Enter Workspace →</button>
+          <input type="email" autoComplete="username" style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none"}} placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
+          <input type="password" autoComplete="current-password" style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none"}} placeholder="Password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
+          {authErr&&<div style={{fontSize:12,color:"#dc2626",background:"#fef2f2",borderRadius:8,padding:"8px 10px"}}>{authErr}</div>}
+          <button disabled={authBusy} style={{background:authBusy?"#93c5fd":"#2563eb",color:"#fff",border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:600,cursor:authBusy?"default":"pointer"}} onClick={doLogin}>{authBusy?"Signing in…":"Sign In →"}</button>
+          <p style={{fontSize:11,color:"#94a3b8",textAlign:"center",margin:0}}>Accounts are created by your administrator.</p>
         </div>
       </div>
     </div>
   );
 
-  if(loading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12,color:"#64748b"}}><div style={{fontSize:36}}>⏳</div><div>Loading…</div></div>);
+  if(!profile)return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#1e3a5f,#2563eb)",display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"system-ui,sans-serif"}}>
+      <div style={{background:"#fff",borderRadius:20,padding:32,width:"100%",maxWidth:360,boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
+        <div style={{textAlign:"center",marginBottom:20}}><div style={{fontSize:44,marginBottom:8}}>👤</div><h1 style={{fontSize:20,fontWeight:700,color:"#1e293b",margin:0}}>Set up your profile</h1><p style={{fontSize:13,color:"#64748b",marginTop:6}}>{authUser.email}</p></div>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <input style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none"}} placeholder="Your name" value={nameIn} onChange={e=>setNameIn(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveProfile()}/>
+          <select style={{border:"1.5px solid #e2e8f0",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none",background:"#fff"}} value={roleIn} onChange={e=>setRoleIn(e.target.value)}>{ROLES.map(r=><option key={r}>{r}</option>)}</select>
+          <button style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:10,padding:"12px",fontSize:14,fontWeight:600,cursor:"pointer"}} onClick={saveProfile}>Continue →</button>
+          <button style={{background:"none",border:"none",color:"#94a3b8",fontSize:12,cursor:"pointer"}} onClick={()=>signOut(auth)}>Sign out</button>
+        </div>
+      </div>
+    </div>
+  );
 
-  const cs=data?.sections.find(s=>s.id===selSec);
-  const gt=gTot(); const tot=data?.sections.reduce((a,s)=>a+(s.items?.length||0),0)||0;
+  if(projects===null)return splash("Loading projects…");
+
+  if(projects.length===0)return(
+    <div style={{minHeight:"100vh",background:"#f1f5f9",display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"system-ui,sans-serif"}}>
+      <div style={{background:"#fff",borderRadius:16,padding:40,maxWidth:420,textAlign:"center",boxShadow:"0 1px 4px rgba(0,0,0,.1)"}}>
+        <div style={{fontSize:44,marginBottom:10}}>📁</div>
+        <h2 style={{fontSize:18,margin:"0 0 6px",color:"#1e293b"}}>No projects yet</h2>
+        <p style={{fontSize:13,color:"#64748b",marginTop:0}}>Create your first tender / project to start building the BOQ.</p>
+        <button onClick={createProject} style={{marginTop:8,background:"#2563eb",color:"#fff",border:"none",borderRadius:10,padding:"11px 22px",fontSize:14,fontWeight:600,cursor:"pointer"}}>+ Create Project</button>
+        <div style={{marginTop:16}}><button onClick={()=>signOut(auth)} style={{background:"none",border:"none",color:"#94a3b8",fontSize:12,cursor:"pointer"}}>Sign out ({user.email})</button></div>
+      </div>
+    </div>
+  );
+
+  if(!data)return splash("Loading project…");
+
+  // ── Main app ────────────────────────────────────────────────────────────────
+  const cs=data.sections.find(s=>s.id===selSec);
+  const gt=gTot(); const tot=data.sections.reduce((a,s)=>a+(s.items?.length||0),0)||0;
   const vcols=ALL_COLS.filter(c=>visCols.has(c.id));
   const cc=cSum();
   const displayCats=cats.some(c=>c.id==="cat_master")?cats:[MASTER_CAT,...cats];
   const catName=id=>displayCats.find(c=>c.id===id)?.name||id;
-  const BUR_MAX=200; // cap rendered rows for performance; search to narrow
-  const _q=burSearch.trim().toLowerCase();
+  const BUR_MAX=200; const _q=burSearch.trim().toLowerCase();
   const _allCat=burItems.filter(b=>b.catId===selCat);
   const _filtered=_q?_allCat.filter(b=>(b.code||"").toLowerCase().includes(_q)||(b.desc||"").toLowerCase().includes(_q)):_allCat;
-  const catTotal=_filtered.length;
-  const catItems=_filtered.slice(0,BUR_MAX);
+  const catTotal=_filtered.length; const catItems=_filtered.slice(0,BUR_MAX);
+  const projName=projects.find(p=>p.id===pid)?.name||"—";
 
   return(
     <div style={{minHeight:"100vh",background:"#f1f5f9",display:"flex",flexDirection:"column",fontFamily:"system-ui,sans-serif"}}>
 
-      <header style={{background:"#1e3a5f",color:"#fff",padding:"10px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(0,0,0,.2)",position:"sticky",top:0,zIndex:200}}>
+      <header style={{background:"#1e3a5f",color:"#fff",padding:"10px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(0,0,0,.2)",position:"sticky",top:0,zIndex:200,gap:10,flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontSize:22}}>🏗️</span>
           <div><div style={{fontWeight:700,fontSize:14}}>QS Workspace</div>
-          <div style={{fontSize:11,color:"#93c5fd"}}>🔴 Live · {tot} BOQ · {burItems.length} BUR{synced?` · ${synced.toLocaleTimeString("en-SG")}`:""}</div></div>
+          <div style={{fontSize:11,color:"#93c5fd"}}>🟢 Live · {tot} BOQ · {burItems.length} BUR</div></div>
         </div>
-        <div style={{background:"#2563eb",borderRadius:20,padding:"4px 12px",fontSize:12,fontWeight:600}}>{user.name} · {user.role}</div>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <select value={pid||""} onChange={e=>setPid(e.target.value)} style={{background:"#16294a",color:"#fff",border:"1px solid #2d4a7a",borderRadius:8,padding:"5px 8px",fontSize:12,fontWeight:600,outline:"none",maxWidth:200}}>
+            {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <button onClick={createProject} title="New project" style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"5px 9px",fontSize:12,fontWeight:700,cursor:"pointer"}}>+</button>
+          <button onClick={renameProject} title="Rename project" style={{background:"#16294a",color:"#cbd5e1",border:"1px solid #2d4a7a",borderRadius:8,padding:"5px 8px",fontSize:12,cursor:"pointer"}}>✎</button>
+          <button onClick={deleteProject} title="Delete project" style={{background:"#16294a",color:"#fca5a5",border:"1px solid #2d4a7a",borderRadius:8,padding:"5px 8px",fontSize:12,cursor:"pointer"}}>🗑</button>
+          <div style={{background:"#2563eb",borderRadius:20,padding:"4px 12px",fontSize:12,fontWeight:600}}>{user.name} · {user.role}</div>
+          <button onClick={()=>signOut(auth)} title="Sign out" style={{background:"#16294a",color:"#cbd5e1",border:"1px solid #2d4a7a",borderRadius:8,padding:"4px 10px",fontSize:12,cursor:"pointer"}}>Sign out</button>
+        </div>
       </header>
 
       {toast&&<div style={{background:"#1d4ed8",color:"#fff",textAlign:"center",padding:"7px",fontSize:13,fontWeight:500}}>{toast}</div>}
@@ -251,10 +264,8 @@ export default function App(){
         {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"10px 13px",fontSize:12,fontWeight:600,border:"none",flexShrink:0,whiteSpace:"nowrap",borderBottom:tab===t.id?"2.5px solid #2563eb":"2.5px solid transparent",color:tab===t.id?"#2563eb":"#64748b",background:"none",cursor:"pointer"}}>{t.label}</button>)}
       </div>
 
-      {/* BUR code datalist for BOQ */}
       <datalist id="burlist">{burItems.filter(b=>b.code).map(b=><option key={b.id} value={b.code}>{b.desc} — S${fmt(bTot(b))}/{b.unit}</option>)}</datalist>
 
-      {/* Rate suggestion banner */}
       {rateSugg&&(
         <div style={{background:"#fef9c3",borderBottom:"1px solid #fde68a",padding:"8px 16px",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",zIndex:90}}>
           <span style={{fontSize:13}}>💡 BUR rate found — <b style={{color:"#1d4ed8"}}>{rateSugg.code}</b>: {rateSugg.desc} = <b>S$ {fmt(rateSugg.rate)}</b></span>
@@ -337,7 +348,6 @@ export default function App(){
         {/* ══ BUR ══ */}
         {tab==="bur"&&(
           <div>
-            {/* Category pills */}
             <div style={{display:"flex",gap:6,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
               <div style={{display:"flex",gap:6,overflowX:"auto",flex:1,paddingBottom:2}}>
                 {displayCats.map(c=><button key={c.id} onClick={()=>setSelCat(c.id)} style={{padding:"6px 12px",borderRadius:20,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,background:selCat===c.id?"#1e3a5f":"#fff",color:selCat===c.id?"#fff":"#475569",boxShadow:"0 1px 3px rgba(0,0,0,.1)"}}>{c.name}<span style={{opacity:.6,fontSize:10,marginLeft:4}}>({burItems.filter(b=>b.catId===c.id).length})</span></button>)}
@@ -351,7 +361,6 @@ export default function App(){
               ):<button onClick={()=>setShowNewCat(true)} style={{background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:20,padding:"5px 12px",fontSize:11,cursor:"pointer",color:"#475569",fontWeight:600,whiteSpace:"nowrap",flexShrink:0}}>+ Category</button>}
             </div>
 
-            {/* Search + import toolbar */}
             <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
               <input value={burSearch} onChange={e=>setBurSearch(e.target.value)} placeholder="🔍 Search code or description…" style={{flex:1,minWidth:200,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none"}}/>
               {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
@@ -367,8 +376,8 @@ export default function App(){
             {catItems.length===0?(
               <div style={{background:"#fff",borderRadius:12,padding:40,textAlign:"center",color:"#94a3b8"}}>
                 <div style={{fontSize:36,marginBottom:8}}>📊</div>
-                <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>No items in this category</div>
-                <div style={{fontSize:13}}>Click "+ Add Item" to create a rate build-up for this scope of work</div>
+                <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>No items{_q?" match your search":" in this category"}</div>
+                <div style={{fontSize:13}}>{_q?"Try a different search term":'Click "+ Add Item" or "Load master list"'}</div>
               </div>
             ):(
               <div style={{display:"flex",flexDirection:"column",gap:8}}>
@@ -380,7 +389,6 @@ export default function App(){
                   const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0);
                   return(
                     <div key={item.id} style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden",border:isPending?"1.5px solid #fcd34d":isApproved?"1.5px solid #86efac":"none"}}>
-                      {/* Header row */}
                       <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",cursor:"pointer"}} onClick={()=>setExpBur(isExp?null:item.id)}>
                         <span style={{fontSize:12,color:isExp?"#2563eb":"#cbd5e1",flexShrink:0}}>{isExp?"▼":"▶"}</span>
                         <div style={{flex:1,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",minWidth:0}}>
@@ -402,7 +410,6 @@ export default function App(){
                         </div>
                       </div>
 
-                      {/* Expanded build-up */}
                       {isExp&&(
                         <div style={{borderTop:"1px solid #f1f5f9",padding:"16px",background:"#fafafa"}}>
                           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:10,marginBottom:12}}>
@@ -410,8 +417,6 @@ export default function App(){
                             <div style={{gridColumn:"span 2"}}><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>DESCRIPTION</label><input style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></div>
                             <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>UNIT</label><select style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",background:"#fff"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></div>
                           </div>
-
-                          {/* Rate components */}
                           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:10,marginBottom:12}}>
                             {COMPS.map(k=>{
                               const hasCostData=(item.costData||[]).filter(e=>e.component===k).length;
@@ -419,9 +424,7 @@ export default function App(){
                                 <div key={k}>
                                   <label style={{fontSize:11,color:"#94a3b8",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3,fontWeight:600}}>
                                     {CLABEL[k].toUpperCase()}
-                                    <button onClick={e=>{e.stopPropagation();setCostModal(item.id);setCType(k);}} style={{fontSize:9,background:hasCostData?"#fef9c3":"#f1f5f9",border:"none",borderRadius:3,padding:"1px 5px",cursor:"pointer",color:hasCostData?"#92400e":"#64748b",fontWeight:600}}>
-                                      📊{hasCostData?` ${hasCostData}`:""}
-                                    </button>
+                                    <button onClick={e=>{e.stopPropagation();setCostModal(item.id);setCType(k);}} style={{fontSize:9,background:hasCostData?"#fef9c3":"#f1f5f9",border:"none",borderRadius:3,padding:"1px 5px",cursor:"pointer",color:hasCostData?"#92400e":"#64748b",fontWeight:600}}>📊{hasCostData?` ${hasCostData}`:""}</button>
                                   </label>
                                   <input type="number" style={{width:"100%",border:k==="subcon"&&isPending?"1.5px solid #f59e0b":k==="subcon"&&isApproved?"1.5px solid #16a34a":"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",background:k==="subcon"&&isPending?"#fffbeb":k==="subcon"&&isApproved?"#f0fdf4":"#fff"}} value={item[k]??""} onChange={e=>updBur(item.id,{[k]:+e.target.value||0})}/>
                                   {k==="subcon"&&isPending&&<div style={{fontSize:9,color:"#b45309",marginTop:2,fontWeight:600}}>🟡 {item.quote.supplier} · {item.quote.date}</div>}
@@ -432,8 +435,6 @@ export default function App(){
                             <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>OH%</label><input type="number" style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none"}} value={item.oh??15} onChange={e=>updBur(item.id,{oh:+e.target.value||0})}/></div>
                             <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>PROFIT%</label><input type="number" style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none"}} value={item.profit??10} onChange={e=>updBur(item.id,{profit:+e.target.value||0})}/></div>
                           </div>
-
-                          {/* Total bar */}
                           <div style={{background:"#eff6ff",borderRadius:8,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                             <div style={{fontSize:12,color:"#475569",display:"flex",gap:16,flexWrap:"wrap"}}>
                               <span>Direct: <b>S$ {fmt(direct)}</b></span>
@@ -441,8 +442,6 @@ export default function App(){
                             </div>
                             <span style={{fontSize:15,fontWeight:800,color:"#1d4ed8"}}>Total Rate: S$ {fmt(total)} / {item.unit}</span>
                           </div>
-
-                          {/* Quote section */}
                           {isPending&&(
                             <div style={{marginTop:10,background:"#fffbeb",borderRadius:8,padding:"10px 14px",border:"1px solid #fde68a",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
                               <div><span style={{fontSize:12,fontWeight:700,color:"#92400e"}}>🟡 Sub-Con Quotation Pending: </span><span style={{fontSize:12,color:"#92400e"}}>S$ {fmt(item.quote.rate)} · {item.quote.supplier} · {item.quote.date}</span></div>
@@ -538,7 +537,7 @@ export default function App(){
         {tab==="summary"&&(
           <div style={{maxWidth:680,margin:"0 auto",display:"flex",flexDirection:"column",gap:12}}>
             <div style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden"}}>
-              <div style={{padding:"12px 16px",borderBottom:"1px solid #f1f5f9",background:"#f8fafc"}}><span style={{fontWeight:700,fontSize:14}}>📊 Tender Summary</span></div>
+              <div style={{padding:"12px 16px",borderBottom:"1px solid #f1f5f9",background:"#f8fafc"}}><span style={{fontWeight:700,fontSize:14}}>📊 {projName} — Tender Summary</span></div>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
                 <thead><tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:11}}>{["Section","Items","Phase A (S$)","Phase B (S$)","Combined (S$)"].map((h,i)=><th key={i} style={{padding:"8px 16px",textAlign:i>1?"right":"left",fontWeight:600,borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}</tr></thead>
                 <tbody>{data.sections.map(sec=>{const t=sTot(sec.id);return(<tr key={sec.id} style={{borderBottom:"1px solid #f8fafc"}}><td style={{padding:"11px 16px",fontWeight:600}}>{sec.name}</td><td style={{padding:"11px 16px",color:"#64748b"}}>{sec.items?.length||0}</td><td style={{padding:"11px 16px",textAlign:"right",color:"#1d4ed8"}}>{fmt(t.A)}</td><td style={{padding:"11px 16px",textAlign:"right",color:"#7c3aed"}}>{fmt(t.B)}</td><td style={{padding:"11px 16px",textAlign:"right",fontWeight:700}}>{fmt(t.A+t.B)}</td></tr>);})}</tbody>
@@ -605,7 +604,7 @@ export default function App(){
               </div>
               <textarea value={pasteText} onChange={e=>setPasteText(e.target.value)} placeholder={"Acoustic Ceiling Panel AC1\tm2\tAcousticCeilingPanel_C1\t130.50\n…"} style={{width:"100%",height:220,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"10px 12px",fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box",resize:"vertical"}}/>
               <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:12}}>
-                <button onClick={()=>{setPasteText("");}} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"8px 14px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>
+                <button onClick={()=>setPasteText("")} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"8px 14px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>
                 <button onClick={importPaste} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"8px 20px",fontSize:12,cursor:"pointer",fontWeight:600}}>Import</button>
               </div>
             </div>
@@ -617,7 +616,6 @@ export default function App(){
       {costModal&&modalItem&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
           <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:720,maxHeight:"88vh",display:"flex",flexDirection:"column",boxShadow:"0 25px 60px rgba(0,0,0,.3)"}}>
-            {/* Modal header */}
             <div style={{padding:"16px 20px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
               <div>
                 <div style={{fontWeight:700,fontSize:15,color:"#1e293b",display:"flex",alignItems:"center",gap:8}}>
@@ -628,8 +626,6 @@ export default function App(){
               </div>
               <button onClick={()=>setCostModal(null)} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,cursor:"pointer",color:"#64748b",fontWeight:600,flexShrink:0}}>Close ✕</button>
             </div>
-
-            {/* Component tabs */}
             <div style={{display:"flex",borderBottom:"1px solid #e2e8f0",padding:"0 20px",flexShrink:0}}>
               {COMPS.map(c=>{const cnt=(modalItem.costData||[]).filter(e=>e.component===c).length;return(
                 <button key={c} onClick={()=>setCType(c)} style={{padding:"9px 14px",fontSize:12,fontWeight:600,border:"none",borderBottom:cType===c?"2.5px solid #2563eb":"2.5px solid transparent",color:cType===c?"#2563eb":"#64748b",background:"none",cursor:"pointer",whiteSpace:"nowrap"}}>
@@ -637,9 +633,7 @@ export default function App(){
                 </button>
               );})}
             </div>
-
             <div style={{flex:1,overflow:"auto",padding:"16px 20px"}}>
-              {/* Entries */}
               {costEntries.length===0?(
                 <div style={{textAlign:"center",padding:"28px 0",color:"#94a3b8",fontSize:13}}>No {CLABEL[cType]} entries yet — add one below</div>
               ):(
@@ -665,8 +659,6 @@ export default function App(){
                   </tbody>
                 </table>
               )}
-
-              {/* Add form */}
               <div style={{background:"#f8fafc",borderRadius:10,padding:14,border:"1px solid #e2e8f0"}}>
                 <div style={{fontSize:12,fontWeight:600,color:"#475569",marginBottom:10}}>+ Add {CLABEL[cType]} Quote / Price</div>
                 <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 2fr",gap:8,marginBottom:10}}>
@@ -680,8 +672,7 @@ export default function App(){
                   <button onClick={addCostEntry} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontSize:12,cursor:"pointer",fontWeight:600}}>Add Entry</button>
                 </div>
               </div>
-
-              {cType==="subcon"&&<div style={{marginTop:10,background:"#fef9c3",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#92400e"}}>💡 Click <b>"→ Use as Quote"</b> to send a supplier rate to Sub-Con Quotation. It will highlight 🟡 yellow until the Lead QS approves it.</div>}
+              {cType==="subcon"&&<div style={{marginTop:10,background:"#fef9c3",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#92400e"}}>💡 Click <b>"→ Use as Quote"</b> to set this supplier rate as the Sub-Con Quotation. It highlights 🟡 until the Lead QS approves it.</div>}
             </div>
           </div>
         </div>
