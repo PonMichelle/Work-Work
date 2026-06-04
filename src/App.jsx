@@ -15,6 +15,21 @@ const DEF_COLS=new Set(["ref","desc","unit","qty","rA","amtA","rB","amtB","code"
 const DEF_CODES=[{id:"dc1",code:"PRELIM",desc:"Preliminaries",cat:"Prelim"},{id:"dc2",code:"BLDG-A",desc:"Building Works Phase A",cat:"Building"},{id:"dc3",code:"BLDG-B",desc:"Building Works Phase B",cat:"Building"},{id:"dc4",code:"EXT-A",desc:"External Works Phase A",cat:"External"},{id:"dc5",code:"EXT-B",desc:"External Works Phase B",cat:"External"},{id:"dc6",code:"ME-ACMV",desc:"Air Conditioning & Mech Ventilation",cat:"M&E"},{id:"dc7",code:"ME-ELV",desc:"Electrical & Low Voltage",cat:"M&E"},{id:"dc8",code:"ME-FP",desc:"Fire Protection",cat:"M&E"},{id:"dc9",code:"ME-STP",desc:"Sewage Treatment Plant",cat:"M&E"},{id:"dc10",code:"FEES",desc:"Professional Fees",cat:"Fees"}];
 const DEF_CATS=["Concrete Works","Formwork","Reinforcement","Brickwork & Blockwork","Waterproofing","Structural Steelwork","Floor & Wall Finishes","Roofing","Doors, Windows & Glazing","External Works","M&E Works","Preliminaries","Others"].map((name,i)=>({id:`cat${i+1}`,name}));
 const MASTER_CAT={id:"cat_master",name:"Master BUR"};
+// Keyword → category id rules for auto-sorting the master list. First match wins; no match → Others (cat13).
+const CATEGORY_RULES=[
+  {cat:"cat5",kw:["waterproof","membrane","tanking","drainage cell","drainage board","bituminous","damp proof"]},
+  {cat:"cat8",kw:["roofing","roof ","metal roof","gutter","downpipe","skylight","rainwater"]},
+  {cat:"cat9",kw:["door","window","glazing","glass","louvre","louver","shutter","ironmonger","mirror","balustrade","handrail","curtain wall","skylight"]},
+  {cat:"cat3",kw:["reinforc","rebar","mesh","brc","column cage","cage","ductility","steel bar","high tensile bar","y bar","r bar"]},
+  {cat:"cat6",kw:["structural steel","steelwork","hollow section","ms plate","steel beam","steel column","metalwork","metal work","steel truss"]},
+  {cat:"cat1",kw:["concrete","screed","blinding","grade c","grouting","grout","cement sand","precast","r.c.","rc slab"]},
+  {cat:"cat2",kw:["formwork","plywood form","form work"]},
+  {cat:"cat4",kw:["brick","block","alc","aac","partition","drywall","stud wall","hollow core panel","masonry"]},
+  {cat:"cat7",kw:["tile","tiling","floor","ceiling","skim","plaster","paint","homog","granite","marble","vinyl","carpet","acoustic","pelmet","cornice","laminate","wallpaper","cladding","wall finish","screed finish","terrazzo"]},
+  {cat:"cat11",kw:["electric","acmv","air-cond","aircon","ventilation","fire ","sprinkler","plumb","sanitary"," pipe","piping","cable","light fitting","lighting","pump","m&e","mechanical","ductwork","duct ","switch","socket","conduit","fcu","ahu","exhaust"]},
+  {cat:"cat10",kw:["kerb","road","turf","planter","landscape","fence","gate","carpark","car park","paver","apron","drain","external","linkway","pavement","sump","precast drain","bollard"]},
+  {cat:"cat12",kw:["prelim","hoarding","site office","scaffold","insurance","temporary","mobilis","pile integrity","load test","survey","testing"]},
+];
 const COMPS=["labour","material","plant","subcon"];
 const CLABEL={labour:"Labour",material:"Material",plant:"Plant",subcon:"Subcon / Supplier"};
 
@@ -44,6 +59,7 @@ export default function App(){
   const [selCat,setSelCat]=useState(DEF_CATS[0].id);
   const [expBur,setExpBur]=useState(null);
   const [burSearch,setBurSearch]=useState("");
+  const [sortBy,setSortBy]=useState("code"); const [sortDir,setSortDir]=useState(1);
   const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("cat_master");
   const [costModal,setCostModal]=useState(null);
   const [cType,setCType]=useState("subcon");
@@ -132,6 +148,24 @@ export default function App(){
     toast_("⏳ Loading master list to shared library…");
     try{ let batch=writeBatch(db),n=0; for(const it of burSeed){ const ref=doc(collection(db,"bur")); const {id,...rest}=it; batch.set(ref,rest); n++; if(n%400===0){await batch.commit();batch=writeBatch(db);} } await batch.commit(); setSelCat("cat_master"); addLogEntry(`Loaded ${burSeed.length} master BUR items`); toast_(`✅ Loaded ${burSeed.length} master items (shared)`); }
     catch(e){ toast_("⚠️ Load failed: "+e.message); }
+  },[burItems,toast_,addLogEntry]);
+
+  // Auto-sort BUR items into the standard categories by keyword; unmatched → Others. User can move any item after.
+  const categorizeMaster=useCallback(async()=>{
+    if(!burItems.length){toast_("No BUR items to sort");return;}
+    if(!confirm(`Auto-sort ${burItems.length} BUR items into categories?\nItems that don't clearly match go to "Others" — you can move any item afterwards.`))return;
+    toast_("⏳ Sorting into categories…");
+    try{
+      const updates=[];
+      for(const b of burItems){
+        const text=((b.group||"")+" "+(b.desc||"")+" "+(b.code||"")).toLowerCase();
+        let cat="cat13";
+        for(const r of CATEGORY_RULES){ if(r.kw.some(k=>text.includes(k))){cat=r.cat;break;} }
+        if(b.catId!==cat)updates.push([b.id,cat]);
+      }
+      for(let i=0;i<updates.length;i+=400){ const batch=writeBatch(db); updates.slice(i,i+400).forEach(([id,cat])=>batch.update(doc(db,"bur",id),{catId:cat})); await batch.commit(); }
+      toast_(`✅ Sorted ${updates.length} items into categories`); addLogEntry(`Auto-sorted ${updates.length} BUR items into categories`);
+    }catch(e){toast_("⚠️ "+e.message);}
   },[burItems,toast_,addLogEntry]);
 
   const importPaste=useCallback(async()=>{
@@ -234,7 +268,15 @@ export default function App(){
   const BUR_MAX=200; const _q=burSearch.trim().toLowerCase();
   const _allCat=burItems.filter(b=>b.catId===selCat);
   const _filtered=_q?_allCat.filter(b=>(b.code||"").toLowerCase().includes(_q)||(b.desc||"").toLowerCase().includes(_q)):_allCat;
-  const catTotal=_filtered.length; const catItems=_filtered.slice(0,BUR_MAX);
+  const _sorted=[..._filtered].sort((a,b)=>{
+    let av,bv;
+    if(sortBy==="rate"){av=bTot(a);bv=bTot(b);return (av-bv)*sortDir;}
+    if(sortBy==="cat"){av=catName(a.catId);bv=catName(b.catId);}
+    else{av=a[sortBy]||"";bv=b[sortBy]||"";}
+    return String(av).localeCompare(String(bv),undefined,{numeric:true})*sortDir;
+  });
+  const catTotal=_sorted.length; const catItems=_sorted.slice(0,BUR_MAX);
+  const toggleSort=f=>{ if(sortBy===f)setSortDir(d=>-d); else{setSortBy(f);setSortDir(1);} };
   const projName=projects.find(p=>p.id===pid)?.name||"—";
 
   return(
@@ -366,6 +408,15 @@ export default function App(){
               {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
               <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
               <button onClick={loadMaster} style={{background:"#1e3a5f",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⬇ Load master list ({burSeed.length})</button>
+              <button onClick={categorizeMaster} style={{background:"#16a34a",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>🗂 Auto-sort to categories</button>
+            </div>
+
+            {/* Sortable column header */}
+            <div style={{display:"flex",gap:6,marginBottom:8,fontSize:11,color:"#64748b",alignItems:"center",flexWrap:"wrap"}}>
+              <span style={{fontWeight:700}}>Sort by:</span>
+              {[["code","Code"],["desc","Description"],["unit","Unit"],["rate","Rate"],["cat","Category"]].map(([f,l])=>(
+                <button key={f} onClick={()=>toggleSort(f)} style={{border:"1px solid #e2e8f0",background:sortBy===f?"#1e3a5f":"#fff",color:sortBy===f?"#fff":"#475569",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>{l}{sortBy===f?(sortDir===1?" ▲":" ▼"):""}</button>
+              ))}
             </div>
 
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
@@ -416,6 +467,7 @@ export default function App(){
                             <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>BUR CODE</label><input style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})}/></div>
                             <div style={{gridColumn:"span 2"}}><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>DESCRIPTION</label><input style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></div>
                             <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>UNIT</label><select style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",background:"#fff"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></div>
+                            <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>CATEGORY</label><select style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
                           </div>
                           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:10,marginBottom:12}}>
                             {COMPS.map(k=>{
