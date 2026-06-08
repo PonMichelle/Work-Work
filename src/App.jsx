@@ -503,7 +503,7 @@ export default function App(){
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                     <thead><tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:11}}>
                       {vcols.map(col=><th key={col.id} style={{padding:"8px 8px",textAlign:col.num||col.id==="by"?"right":col.id==="unit"?"center":"left",fontWeight:600,whiteSpace:"nowrap",borderBottom:"1px solid #e2e8f0",minWidth:col.w}}>{col.label}</th>)}
-                      {(data.cols||[]).map(c=><th key={c.id} style={{padding:"8px 8px",textAlign:"right",fontWeight:600,whiteSpace:"nowrap",borderBottom:"1px solid #e2e8f0",minWidth:90,color:"#0f766e"}} title={c.formula?`= ${c.formula}`:"manual entry"}>{c.label}{c.formula?" ƒ":""} <button onClick={()=>delCol(c.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:11,fontWeight:700}}>✕</button></th>)}
+                      {(data.cols||[]).map(c=><th key={c.id} style={{padding:"8px 8px",textAlign:"right",fontWeight:600,whiteSpace:"nowrap",borderBottom:"1px solid #e2e8f0",minWidth:90,color:"#0f766e"}}><span onClick={()=>{const f=prompt(`Formula for "${c.label}"\n\nUse: Qty, Rate A, Rate B, Amt A, Amt B, and other column names.\nLeave blank for a manual-entry column.\nExample:  Qty * Rate A * markup`,c.formula||"");if(f!==null)setColFormula(c.id,f);}} title={c.formula?`= ${c.formula}  (click to edit)`:"click to set a formula"} style={{cursor:"pointer",textDecoration:"underline dotted"}}>{c.label}{c.formula?" ƒ":""}</span> <button onClick={()=>delCol(c.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:11,fontWeight:700}}>✕</button></th>)}
                       <th style={{padding:"8px 6px",borderBottom:"1px solid #e2e8f0",width:28}}></th>
                     </tr></thead>
                     <tbody>
@@ -526,13 +526,9 @@ export default function App(){
                             if(col.id==="by")return<td key={col.id} style={{...p,textAlign:"right",color:"#94a3b8",fontSize:10}}>{item.by||"—"}</td>;
                             return null;
                           })}
-                          {(data.cols||[]).map(c=>{
-                            if(c.formula){
-                              if(ri===0)return<td key={c.id} style={{padding:"4px 6px"}}><input key={c.id+c.formula} defaultValue={"="+c.formula} title="Edit this formula — every row updates automatically" onBlur={e=>setColFormula(c.id,e.target.value)} style={{width:120,border:"1px dashed #5eead4",borderRadius:4,fontSize:12,outline:"none",background:"#f0fdfa",textAlign:"right",color:"#0d9488",fontStyle:"italic",padding:"2px 4px"}}/></td>;
-                              return<td key={c.id} style={{padding:"4px 6px",textAlign:"right",color:"#0f766e",fontWeight:600,whiteSpace:"nowrap"}}>{typeof cxv[c.id]==="number"?fmt(cxv[c.id]):cxv[c.id]}</td>;
-                            }
-                            return<td key={c.id} style={{padding:"4px 6px"}}><input style={{width:96,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} placeholder={ri===0?"= formula / value":""} value={item.cx?.[c.id]??""} onChange={e=>updItem(cs.id,item.id,{cx:{...(item.cx||{}),[c.id]:e.target.value}})} onBlur={e=>{ if(e.target.value.trim().startsWith("="))setColFormula(c.id,e.target.value); else blurSave(cs.id,item.id,item.code); }}/></td>;
-                          })}
+                          {(data.cols||[]).map(c=>c.formula
+                            ?<td key={c.id} style={{padding:"4px 6px",textAlign:"right",color:"#0f766e",fontWeight:600,whiteSpace:"nowrap"}}>{typeof cxv[c.id]==="number"?fmt(cxv[c.id]):cxv[c.id]}</td>
+                            :<td key={c.id} style={{padding:"4px 6px"}}><input style={{width:96,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} placeholder={ri===0?"type value":""} value={item.cx?.[c.id]??""} onChange={e=>updItem(cs.id,item.id,{cx:{...(item.cx||{}),[c.id]:e.target.value}})} onBlur={()=>blurSave(cs.id,item.id,item.code)}/></td>)}
                           <td style={{padding:"4px 4px",textAlign:"center"}}><button onClick={()=>delItem(cs.id,item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></td>
                         </tr>
                       );})}
