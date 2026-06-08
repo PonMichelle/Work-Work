@@ -392,7 +392,7 @@ export default function App(){
   if(authUser===undefined)return splash("Loading…");
 
   if(!authUser)return(
-    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#1e3a5f,#2563eb)",display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"system-ui,sans-serif"}}>
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4f46e5 0%,#9333ea 45%,#ec4899 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"system-ui,sans-serif"}}>
       <div style={{background:"#fff",borderRadius:20,padding:32,width:"100%",maxWidth:360,boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
         <div style={{textAlign:"center",marginBottom:24}}>
           <div style={{fontSize:52,marginBottom:8}}>🏗️</div>
@@ -411,7 +411,7 @@ export default function App(){
   );
 
   if(!profile)return(
-    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#1e3a5f,#2563eb)",display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"system-ui,sans-serif"}}>
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4f46e5 0%,#9333ea 45%,#ec4899 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"system-ui,sans-serif"}}>
       <div style={{background:"#fff",borderRadius:20,padding:32,width:"100%",maxWidth:360,boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
         <div style={{textAlign:"center",marginBottom:20}}><div style={{fontSize:44,marginBottom:8}}>👤</div><h1 style={{fontSize:20,fontWeight:700,color:"#1e293b",margin:0}}>Set up your profile</h1><p style={{fontSize:13,color:"#64748b",marginTop:6}}>{authUser.email}</p></div>
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
@@ -508,9 +508,9 @@ export default function App(){
   const projName=projects.find(p=>p.id===pid)?.name||"—";
 
   return(
-    <div style={{minHeight:"100vh",background:"#f1f5f9",display:"flex",flexDirection:"column",fontFamily:"system-ui,sans-serif"}}>
+    <div style={{minHeight:"100vh",background:"linear-gradient(180deg,#faf5ff 0%,#eff6ff 100%)",display:"flex",flexDirection:"column",fontFamily:"system-ui,sans-serif"}}>
 
-      <header style={{background:"#1e3a5f",color:"#fff",padding:"10px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(0,0,0,.2)",position:"sticky",top:0,zIndex:200,gap:10,flexWrap:"wrap"}}>
+      <header style={{background:"linear-gradient(90deg,#4f46e5 0%,#9333ea 50%,#db2777 100%)",color:"#fff",padding:"10px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 10px rgba(124,58,237,.35)",position:"sticky",top:0,zIndex:200,gap:10,flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontSize:22}}>🏗️</span>
           <div><div style={{fontWeight:700,fontSize:14}}>QS Workspace</div>
@@ -528,10 +528,10 @@ export default function App(){
         </div>
       </header>
 
-      {toast&&<div style={{background:"#1d4ed8",color:"#fff",textAlign:"center",padding:"7px",fontSize:13,fontWeight:500}}>{toast}</div>}
+      {toast&&<div style={{background:"linear-gradient(90deg,#9333ea,#db2777)",color:"#fff",textAlign:"center",padding:"7px",fontSize:13,fontWeight:600}}>{toast}</div>}
 
       <div style={{background:"#fff",borderBottom:"1px solid #e2e8f0",display:"flex",overflowX:"auto",flexShrink:0,position:"sticky",top:44,zIndex:100}}>
-        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"10px 13px",fontSize:12,fontWeight:600,border:"none",flexShrink:0,whiteSpace:"nowrap",borderBottom:tab===t.id?"2.5px solid #2563eb":"2.5px solid transparent",color:tab===t.id?"#2563eb":"#64748b",background:"none",cursor:"pointer"}}>{t.label}</button>)}
+        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"10px 14px",fontSize:12,fontWeight:700,border:"none",flexShrink:0,whiteSpace:"nowrap",borderBottom:tab===t.id?"3px solid #9333ea":"3px solid transparent",color:tab===t.id?"#9333ea":"#64748b",background:tab===t.id?"linear-gradient(180deg,rgba(147,51,234,.08),transparent)":"none",cursor:"pointer"}}>{t.label}</button>)}
       </div>
 
       <datalist id="burlist">{burItems.filter(b=>b.code).map(b=><option key={b.id} value={b.code}>{b.desc} — S${fmt(bTot(b))}/{b.unit}</option>)}</datalist>
@@ -784,7 +784,7 @@ export default function App(){
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
                 <thead><tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:11}}>{["Section","Items","Phase A (S$)","Phase B (S$)","Combined (S$)"].map((h,i)=><th key={i} style={{padding:"8px 16px",textAlign:i>1?"right":"left",fontWeight:600,borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}</tr></thead>
                 <tbody>{data.sections.map(sec=>{const t=sTot(sec.id);return(<tr key={sec.id} style={{borderBottom:"1px solid #f8fafc"}}><td style={{padding:"11px 16px",fontWeight:600}}>{sec.name}</td><td style={{padding:"11px 16px",color:"#64748b"}}>{sec.items?.length||0}</td><td style={{padding:"11px 16px",textAlign:"right",color:"#1d4ed8"}}>{fmt(t.A)}</td><td style={{padding:"11px 16px",textAlign:"right",color:"#7c3aed"}}>{fmt(t.B)}</td><td style={{padding:"11px 16px",textAlign:"right",fontWeight:700}}>{fmt(t.A+t.B)}</td></tr>);})}</tbody>
-                <tfoot><tr style={{background:"#1e3a5f",color:"#fff",fontWeight:700,fontSize:14}}><td style={{padding:"12px 16px"}}>GRAND TOTAL</td><td style={{padding:"12px 16px"}}>{tot}</td><td style={{padding:"12px 16px",textAlign:"right"}}>S$ {fmt(gt.A)}</td><td style={{padding:"12px 16px",textAlign:"right"}}>S$ {fmt(gt.B)}</td><td style={{padding:"12px 16px",textAlign:"right"}}>S$ {fmt(gt.A+gt.B)}</td></tr></tfoot>
+                <tfoot><tr style={{background:"#7c3aed",color:"#fff",fontWeight:700,fontSize:14}}><td style={{padding:"12px 16px"}}>GRAND TOTAL</td><td style={{padding:"12px 16px"}}>{tot}</td><td style={{padding:"12px 16px",textAlign:"right"}}>S$ {fmt(gt.A)}</td><td style={{padding:"12px 16px",textAlign:"right"}}>S$ {fmt(gt.B)}</td><td style={{padding:"12px 16px",textAlign:"right"}}>S$ {fmt(gt.A+gt.B)}</td></tr></tfoot>
               </table>
             </div>
             <div style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden"}}>
