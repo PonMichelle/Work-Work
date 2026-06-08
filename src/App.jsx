@@ -494,6 +494,10 @@ export default function App(){
                 <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>delBur(item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></td>
               </tr>
               {isExp&&(<tr><td colSpan={10} style={{background:"#fafafa",padding:"12px 16px",borderBottom:"1px solid #eef2f7"}}>
+                <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:12}}>
+                  <div style={{flex:"2 1 320px"}}><label style={lbl}>DESCRIPTION (full)</label><textarea value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:6,padding:"7px 10px",fontSize:13,outline:"none",minHeight:64,resize:"vertical",boxSizing:"border-box",lineHeight:1.4}}/></div>
+                  <div style={{flex:"1 1 180px"}}><label style={lbl}>BUR CODE</label><input value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:6,padding:"7px 10px",fontSize:13,outline:"none",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8",boxSizing:"border-box"}}/></div>
+                </div>
                 <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
                   <div><label style={lbl}>SUBCON (S$)</label><input type="number" style={{...inp,width:90}} value={item.subcon?item.subcon:""} onChange={e=>updBur(item.id,{subcon:+e.target.value||0})}/></div>
                   <div><label style={lbl}>OH %</label><input type="number" style={{...inp,width:70}} value={item.oh??15} onChange={e=>updBur(item.id,{oh:+e.target.value||0})}/></div>
