@@ -38,6 +38,8 @@ const CLABEL={labour:"Labour",material:"Material",plant:"Plant",subcon:"Subcon /
 const newSections=()=>SECTIONS.map(s=>({...s,items:[]}));
 const fmt=n=>(n||0).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFractionDigits:2});
 // Resize/compress an image File or Blob to a small JPEG data URL (for storing quote photos).
+// Aggressively shrink a data-URL image for embedding into Excel (small dimensions + low quality).
+const shrinkDataURL=(dataUrl,max=460,q=0.45)=>new Promise(res=>{ if(!dataUrl){res("");return;} const im=new Image(); im.onload=()=>{ let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",q));}catch{res(dataUrl);} }; im.onerror=()=>res(dataUrl); im.src=dataUrl; });
 const imgToDataURL=blob=>new Promise(res=>{ if(!blob){res("");return;} const fr=new FileReader(); fr.onload=()=>{ const im=new Image(); im.onload=()=>{ const max=1100; let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",0.7));}catch{res("");} }; im.onerror=()=>res(""); im.src=fr.result; }; fr.onerror=()=>res(""); fr.readAsDataURL(blob); });
 const uid=()=>"_"+Math.random().toString(36).slice(2,10);
 const bTot=b=>{const d=(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0),oh=d*(+b.oh||0)/100,s=d+oh;return s*(1+(+b.profit||0)/100);};
@@ -296,7 +298,7 @@ export default function App(){
         const ph=ps.getRow(1); ["Code","Description","Supplier","Rate (S$)","Photo"].forEach((h,i)=>{const c=ph.getCell(i+1);c.value=h;c.font={bold:true};c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}};c.border=bd;}); ph.height=20;
         let rr=2;
         for(const p of photos){ const row=ps.getRow(rr); row.getCell(1).value=p.code||""; row.getCell(2).value=p.desc||""; row.getCell(3).value=p.supplier||""; row.getCell(4).value=+p.rate||null; row.getCell(4).numFmt="#,##0.00"; [1,2,3,4,5].forEach(ci=>row.getCell(ci).border=bd); row.height=96;
-          try{ const m=/^data:image\/(\w+);base64,(.+)$/.exec(p.data); if(m){ const id=wb.addImage({base64:m[2],extension:(m[1]==="jpg"?"jpeg":m[1])}); ps.addImage(id,{tl:{col:4,row:rr-1},ext:{width:124,height:92}}); } }catch{}
+          try{ const small=await shrinkDataURL(p.data); const m=/^data:image\/(\w+);base64,(.+)$/.exec(small); if(m){ const id=wb.addImage({base64:m[2],extension:"jpeg"}); ps.addImage(id,{tl:{col:4,row:rr-1},ext:{width:124,height:92}}); } }catch{}
           rr++;
         }
       }
