@@ -420,8 +420,8 @@ export default function App(){
 
       <div style={{flex:1,overflow:"auto",padding:12}}>
 
-        {/* ══ BOQ — Master BQ rate feed ══ */}
-        {tab==="boq"&&(
+        {/* ══ BOQ — Master BQ rate feed (disabled; kept for export button) ══ */}
+        {false&&(
           <div style={{maxWidth:760,margin:"0 auto",display:"flex",flexDirection:"column",gap:12}}>
             <div style={{background:"#fff",borderRadius:12,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>
               <div style={{fontWeight:700,fontSize:16,color:"#1e293b",marginBottom:6}}>📋 Master BQ — Rate Feed</div>
@@ -460,7 +460,7 @@ export default function App(){
             </div>
           </div>
         )}
-        {false&&(
+        {tab==="boq"&&(
           <div>
             <div style={{display:"flex",gap:8,marginBottom:12,overflowX:"auto",paddingBottom:4}}>
               {data.sections.map(sec=><button key={sec.id} onClick={()=>setSelSec(sec.id)} style={{padding:"6px 14px",borderRadius:20,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,background:selSec===sec.id?"#2563eb":"#fff",color:selSec===sec.id?"#fff":"#475569",boxShadow:"0 1px 4px rgba(0,0,0,.1)"}}>{sec.name}<span style={{opacity:.7,fontSize:11,marginLeft:4}}>({sec.items?.length||0})</span></button>)}
