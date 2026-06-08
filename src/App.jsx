@@ -621,55 +621,47 @@ export default function App(){
 
         {/* ══ BUR ══ */}
         {tab==="bur"&&(
-          <div>
-            <div style={{display:"flex",gap:6,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
-              <div style={{display:"flex",gap:6,overflowX:"auto",flex:1,paddingBottom:2}}>
-                {displayCats.map(c=><button key={c.id} onClick={()=>setSelCat(c.id)} style={{padding:"6px 12px",borderRadius:20,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,background:selCat===c.id?"#1e3a5f":"#fff",color:selCat===c.id?"#fff":"#475569",boxShadow:"0 1px 3px rgba(0,0,0,.1)"}}>{c.name}<span style={{opacity:.6,fontSize:10,marginLeft:4}}>({burItems.filter(b=>b.catId===c.id).length})</span></button>)}
-              </div>
+          <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+            {/* Left vertical category sidebar */}
+            <div style={{width:208,flexShrink:0,background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",maxHeight:"80vh",overflow:"auto",padding:8}}>
+              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",padding:"4px 8px",letterSpacing:".5px"}}>CATEGORIES</div>
+              {displayCats.map(c=>{const n=burItems.filter(b=>b.catId===c.id).length; return(
+                <button key={c.id} onClick={()=>setSelCat(c.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,width:"100%",textAlign:"left",padding:"7px 10px",borderRadius:8,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",marginBottom:2,background:selCat===c.id?"#1e3a5f":"transparent",color:selCat===c.id?"#fff":"#475569"}}>
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</span><span style={{opacity:.7,fontSize:10,flexShrink:0}}>{n}</span>
+                </button>);})}
               {showNewCat?(
-                <div style={{display:"flex",gap:4,flexShrink:0}}>
-                  <input style={{border:"1px solid #e2e8f0",borderRadius:7,padding:"5px 9px",fontSize:12,outline:"none",width:160}} placeholder="Category name" value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newCat.trim()){pushCats([...cats,{id:uid(),name:newCat.trim()}]);setNewCat("");setShowNewCat(false);}}}/>
-                  <button onClick={()=>{if(newCat.trim()){pushCats([...cats,{id:uid(),name:newCat.trim()}]);setNewCat("");setShowNewCat(false);}}} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,cursor:"pointer",fontWeight:600}}>Add</button>
-                  <button onClick={()=>setShowNewCat(false)} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"5px 8px",fontSize:11,cursor:"pointer",color:"#64748b"}}>✕</button>
+                <div style={{display:"flex",flexDirection:"column",gap:4,padding:"6px 4px"}}>
+                  <input style={{border:"1px solid #e2e8f0",borderRadius:7,padding:"5px 9px",fontSize:12,outline:"none"}} placeholder="Category name" value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newCat.trim()){pushCats([...cats,{id:uid(),name:newCat.trim()}]);setNewCat("");setShowNewCat(false);}}}/>
+                  <div style={{display:"flex",gap:4}}><button onClick={()=>{if(newCat.trim()){pushCats([...cats,{id:uid(),name:newCat.trim()}]);setNewCat("");setShowNewCat(false);}}} style={{flex:1,background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"5px",fontSize:11,cursor:"pointer",fontWeight:600}}>Add</button><button onClick={()=>setShowNewCat(false)} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"5px 8px",fontSize:11,cursor:"pointer",color:"#64748b"}}>✕</button></div>
                 </div>
-              ):<button onClick={()=>setShowNewCat(true)} style={{background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:20,padding:"5px 12px",fontSize:11,cursor:"pointer",color:"#475569",fontWeight:600,whiteSpace:"nowrap",flexShrink:0}}>+ Category</button>}
+              ):<button onClick={()=>setShowNewCat(true)} style={{width:"100%",marginTop:4,background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:8,padding:"6px",fontSize:11,cursor:"pointer",color:"#475569",fontWeight:600}}>+ Category</button>}
             </div>
 
-            <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
-              <input value={burSearch} onChange={e=>setBurSearch(e.target.value)} placeholder="🔍 Search code or description…" style={{flex:1,minWidth:200,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none"}}/>
-              {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
-              <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
-              <button onClick={exportBUR} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⤓ Export Excel</button>
-              <button onClick={loadMaster} style={{background:"#1e3a5f",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⬇ Load master list ({burSeed.items.length})</button>
-            </div>
+            {/* Right content */}
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
+                <input value={burSearch} onChange={e=>setBurSearch(e.target.value)} placeholder="🔍 Search code or description…" style={{flex:1,minWidth:180,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none"}}/>
+                {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
+                <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
+                <button onClick={exportBUR} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⤓ Export Excel</button>
+                <button onClick={loadMaster} style={{background:"#1e3a5f",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⬇ Load master list ({burSeed.items.length})</button>
+              </div>
 
-            {/* Sortable column header + layout toggle */}
-            <div style={{display:"flex",gap:6,marginBottom:8,fontSize:11,color:"#64748b",alignItems:"center",flexWrap:"wrap"}}>
-              <span style={{fontWeight:700}}>Sort by:</span>
-              {[["code","Code"],["desc","Description"],["unit","Unit"],["rate","Rate"],["cat","Category"]].map(([f,l])=>(
-                <button key={f} onClick={()=>toggleSort(f)} style={{border:"1px solid #e2e8f0",background:sortBy===f?"#1e3a5f":"#fff",color:sortBy===f?"#fff":"#475569",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>{l}{sortBy===f?(sortDir===1?" ▲":" ▼"):""}</button>
-              ))}
-              <span style={{marginLeft:12,fontWeight:700}}>Layout:</span>
-              {[["tabs","📑 By tab"],["all","☰ All categories"]].map(([v,l])=>(
-                <button key={v} onClick={()=>setBurView(v)} style={{border:"1px solid #e2e8f0",background:burView===v?"#1e3a5f":"#fff",color:burView===v?"#fff":"#475569",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>{l}</button>
-              ))}
-              <span style={{marginLeft:8,color:"#cbd5e1"}}>· drag column edges to resize</span>
-            </div>
+              <div style={{display:"flex",gap:6,marginBottom:8,fontSize:11,color:"#64748b",alignItems:"center",flexWrap:"wrap"}}>
+                <span style={{fontWeight:700}}>Sort by:</span>
+                {[["code","Code"],["desc","Description"],["unit","Unit"],["rate","Rate"],["cat","Category"]].map(([f,l])=>(
+                  <button key={f} onClick={()=>toggleSort(f)} style={{border:"1px solid #e2e8f0",background:sortBy===f?"#1e3a5f":"#fff",color:sortBy===f?"#fff":"#475569",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>{l}{sortBy===f?(sortDir===1?" ▲":" ▼"):""}</button>
+                ))}
+                <span style={{marginLeft:8,color:"#cbd5e1"}}>· drag column edges to resize</span>
+              </div>
 
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
-              <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{_q?"🔎 Search results (all categories)":catName(selCat)} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catTotal} items{catItems.length<catTotal?` (showing first ${catItems.length} — refine search)`:""}</span></span>
-              <button onClick={()=>addBurItem(selCat)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Item</button>
-            </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
+                <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{_q?"🔎 Search results (all categories)":catName(selCat)} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catTotal} items{catItems.length<catTotal?` (showing first ${catItems.length} — refine search)`:""}</span></span>
+                <button onClick={()=>addBurItem(selCat)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Item</button>
+              </div>
 
-            {(()=>{
-              if(_q) return catItems.length?burTableEl(catItems):burEmpty;
-              if(burView==="all"){
-                const groups=cats.map(c=>({c,items:[...burItems.filter(b=>b.catId===c.id)].sort((a,b)=>{const f=sortBy==="cat"?"code":sortBy; if(f==="rate")return (bTot(a)-bTot(b))*sortDir; return String(a[f]||"").localeCompare(String(b[f]||""),undefined,{numeric:true})*sortDir;})})).filter(g=>g.items.length);
-                if(!groups.length) return burEmpty;
-                return <div style={{display:"flex",flexDirection:"column",gap:14}}>{groups.map(g=><div key={g.c.id}><div style={{fontWeight:700,fontSize:13,color:"#92400e",background:"#fff9c4",padding:"7px 12px",borderRadius:"8px 8px 0 0",border:"1px solid #fde68a"}}>{g.c.name} <span style={{fontWeight:400,color:"#b45309"}}>({g.items.length})</span></div>{burTableEl(g.items)}</div>)}</div>;
-              }
-              return catItems.length?burTableEl(catItems):burEmpty;
-            })()}
+              {catItems.length?burTableEl(catItems):burEmpty}
+            </div>
           </div>
         )}
 
