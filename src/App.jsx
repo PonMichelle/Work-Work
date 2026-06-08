@@ -280,15 +280,17 @@ export default function App(){
       const hr=ws.getRow(2); headers.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font={bold:true}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}}; c.border=bd; c.alignment={horizontal:(i>=3&&i<=7)?"right":"left",vertical:"middle",wrapText:true}; }); hr.height=22;
       { const pc=ws.getCell(2,headers.length+1); pc.value="Photos"; pc.font={bold:true}; pc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}}; pc.border=bd; }
       for(let c=headers.length+1;c<=headers.length+12;c++)ws.getColumn(c).width=18;
+      const PAL=["FFFDE68A","FFBFDBFE","FFBBF7D0","FFFBCFE8","FFDDD6FE","FFFED7AA","FFA5F3FC","FFE9D5FF","FFFEF08A","FFD9F99D","FFFECACA","FFC7D2FE","FFFCD34D","FF99F6E4"];
+      const tint=hex=>{ const r=parseInt(hex.slice(2,4),16),g=parseInt(hex.slice(4,6),16),b=parseInt(hex.slice(6,8),16); const m=x=>Math.round(x+(255-x)*0.62).toString(16).padStart(2,"0"); return "FF"+m(r)+m(g)+m(b); };
       let r=3, count=0, photoCount=0;
-      for(const g of groups){
-        ws.mergeCells(r,1,r,headers.length); const cc=ws.getCell(r,1); cc.value=g.name+"  ("+g.items.length+")"; cc.font={bold:true,color:{argb:"FF92400E"}}; cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF9C4"}}; cc.border=bd; r++;
+      for(let gi=0;gi<groups.length;gi++){ const g=groups[gi]; const band=PAL[gi%PAL.length]; const rowTint=tint(band);
+        ws.mergeCells(r,1,r,headers.length+12); const cc=ws.getCell(r,1); cc.value=g.name+"   ("+g.items.length+")"; cc.font={bold:true,size:12,color:{argb:"FF1E293B"}}; cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:band}}; cc.border=bd; ws.getRow(r).height=20; r++;
         for(const it of g.items){
           const q=(it.costData||[]).filter(e=>e.component==="subcon").map(e=>`${e.supplier}: ${e.rate}${e.date?` (${e.date})`:""}`).join("  |  ");
           const total=+bTot(it)||0;
           const vals=[it.desc||"",it.unit||"",it.code||"",+it.labour||0,+it.material||0,+it.plant||0,+it.subcon||0,total,q];
           const row=ws.getRow(r);
-          vals.forEach((v,i)=>{ const c=row.getCell(i+1); c.value=(moneyCols.has(i+1)&&!(+v>0))?null:v; c.border=bd; c.alignment={vertical:"top",horizontal:(i>=3&&i<=7)?"right":"left",wrapText:(i===0||i===8)}; if(moneyCols.has(i+1))c.numFmt="#,##0.00"; if(i===2)c.font={name:"Consolas",color:{argb:"FF1D4ED8"}}; if(i===7)c.font={bold:true,color:{argb:"FF1D4ED8"}}; });
+          vals.forEach((v,i)=>{ const c=row.getCell(i+1); c.value=(moneyCols.has(i+1)&&!(+v>0))?null:v; c.border=bd; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:rowTint}}; c.alignment={vertical:"top",horizontal:(i>=3&&i<=7)?"right":"left",wrapText:(i===0||i===8)}; if(moneyCols.has(i+1))c.numFmt="#,##0.00"; if(i===2)c.font={name:"Consolas",color:{argb:"FF1D4ED8"}}; if(i===7)c.font={bold:true,color:{argb:"FF1D4ED8"}}; });
           // embed this item's photos in the columns after the table, on the same row
           const itemPhotos=(it.costData||[]).flatMap(e=>e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[])).slice(0,12);
           if(itemPhotos.length){ row.height=98; for(let i=0;i<itemPhotos.length;i++){ try{ const small=await shrinkDataURL(itemPhotos[i]); const m=/^data:image\/(\w+);base64,(.+)$/.exec(small); if(m){ const id=wb.addImage({base64:m[2],extension:"jpeg"}); ws.addImage(id,{tl:{col:headers.length+i,row:r-1},ext:{width:124,height:92}}); photoCount++; } }catch{} } }
