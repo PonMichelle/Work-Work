@@ -56,10 +56,15 @@ function computeCols(item,cols){
     for(const nm of names){ const pat=nm.replace(/[.*+?^${}()|[\]\\]/g,"\\$&").replace(/\s+/g,"\\s*"); e=e.replace(new RegExp(pat,"gi"),"("+(map[nm]||0)+")"); }
     try{ const r=Function('"use strict";return ('+e+');')(); return (typeof r==="number"&&isFinite(r))?r:"ERR"; }catch{ return "ERR"; }
   };
+  // Pre-register every column name (init 0 / manual value) so any reference resolves — no ERR from names.
+  for(const c of (cols||[])){ if(c.formula)put(c.label,0); else put(c.label,parseFloat(item.cx?.[c.id]??"")||0); }
   const out={};
-  for(const c of (cols||[])){
-    if(c.formula){ const v=evalNamed(c.formula); out[c.id]=v; put(c.label,typeof v==="number"?v:0); }
-    else { const val=item.cx?.[c.id]??""; out[c.id]=val; put(c.label,parseFloat(val)||0); }
+  // A few passes so columns can reference each other in any order.
+  for(let pass=0;pass<4;pass++){
+    for(const c of (cols||[])){
+      if(c.formula){ const v=evalNamed(c.formula); out[c.id]=v; put(c.label,typeof v==="number"?v:0); }
+      else { const val=item.cx?.[c.id]??""; out[c.id]=val; }
+    }
   }
   return out;
 }
