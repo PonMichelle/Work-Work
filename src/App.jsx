@@ -272,6 +272,7 @@ export default function App(){
       const headers=["Description","Unit","Code","Labour","Material","Plant","Subcon","Rate","Sub-Con Quotes"];
       ws.columns=[{width:50},{width:8},{width:22},{width:10},{width:11},{width:9},{width:11},{width:12},{width:55}];
       const moneyCols=new Set([4,5,6,7,8]);
+      const codeCount={}; burItems.forEach(b=>{const k=(b.code||"").trim().toLowerCase(); if(k)codeCount[k]=(codeCount[k]||0)+1;});
       // group by category
       const groups=[]; const known=new Set();
       const orderedCats=catSort==="none"?cats:[...cats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
@@ -292,6 +293,7 @@ export default function App(){
           const vals=[it.desc||"",it.unit||"",it.code||"",+it.labour||0,+it.material||0,+it.plant||0,+it.subcon||0,total,q];
           const row=ws.getRow(r);
           vals.forEach((v,i)=>{ const c=row.getCell(i+1); c.value=(moneyCols.has(i+1)&&!(+v>0))?null:v; c.border=bd; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:fillArgb}}; c.alignment={vertical:"top",horizontal:(i>=3&&i<=7)?"right":"left",wrapText:(i===0||i===8)}; if(moneyCols.has(i+1))c.numFmt="#,##0.00"; if(i===2)c.font={name:"Consolas",color:{argb:"FF1D4ED8"}}; if(i===7)c.font={bold:true,color:{argb:"FF1D4ED8"}}; });
+          if((codeCount[(it.code||"").trim().toLowerCase()]||0)>1){ const cc2=row.getCell(3); cc2.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFECACA"}}; cc2.font={name:"Consolas",bold:true,color:{argb:"FFB91C1C"}}; }
           // embed this item's photos in the columns after the table, on the same row
           const itemPhotos=(it.costData||[]).flatMap(e=>e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[])).slice(0,12);
           if(itemPhotos.length){ row.height=98; for(let i=0;i<itemPhotos.length;i++){ try{ const small=await shrinkDataURL(itemPhotos[i]); const m=/^data:image\/(\w+);base64,(.+)$/.exec(small); if(m){ const id=wb.addImage({base64:m[2],extension:"jpeg"}); ws.addImage(id,{tl:{col:headers.length+i,row:r-1},ext:{width:124,height:92}}); photoCount++; } }catch{} } }
@@ -464,6 +466,9 @@ export default function App(){
   const toggleSort=f=>{ if(sortBy===f)setSortDir(d=>-d); else{setSortBy(f);setSortDir(1);} };
   const renameCat=cid=>{ const c=cats.find(x=>x.id===cid); if(!c)return; const nm=prompt("Rename category:",c.name); if(nm&&nm.trim())pushCats(cats.map(x=>x.id===cid?{...x,name:nm.trim()}:x)); };
   const delCat=cid=>{ const n=burItems.filter(b=>b.catId===cid).length; if(n>0){alert(`This category has ${n} item(s). Move them to another category first (open an item → CATEGORY), then delete.`);return;} if(confirm("Delete this empty category?")){ pushCats(cats.filter(x=>x.id!==cid)); if(selCat===cid){const o=cats.find(x=>x.id!==cid); setSelCat(o?o.id:"");} } };
+  const _codeCount={}; burItems.forEach(b=>{const k=(b.code||"").trim().toLowerCase(); if(k)_codeCount[k]=(_codeCount[k]||0)+1;});
+  const isDupCode=code=>{const k=(code||"").trim().toLowerCase(); return !!k&&_codeCount[k]>1;};
+  const dupCount=Object.values(_codeCount).filter(n=>n>1).length;
   const burCw=k=>burColW[k]??({desc:360,unit:60,code:150,labour:90,material:95,plant:80,rate:100,cd:90}[k]||80);
   const startBurDrag=(k,e)=>{ e.preventDefault();e.stopPropagation(); burDragRef.current={k,start:e.clientX,startW:burCw(k)}; };
   const burHead=[["desc","Description","left"],["unit","Unit","left"],["code","BUR Code","left"],["labour","Labour","right"],["material","Material","right"],["plant","Plant","right"],["rate","Rate (S$)","right"],["cd","Cost Data","center"]];
@@ -479,14 +484,14 @@ export default function App(){
         </tr></thead>
         <tbody>
           {items.map((item,ri)=>{
-            const isExp=expBur===item.id; const total=bTot(item); const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0); const cdCount=(item.costData||[]).length;
+            const isExp=expBur===item.id; const total=bTot(item); const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0); const cdCount=(item.costData||[]).length; const dup=isDupCode(item.code);
             const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2}; const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
             return(<Fragment key={item.id}>
               <tr style={{borderBottom:"1px solid #f8fafc",background:ri%2===1?"#f5f3ff":"#fff"}}>
                 <td style={{padding:"2px 4px",textAlign:"center",cursor:"pointer",color:isExp?"#2563eb":"#cbd5e1"}} onClick={()=>setExpBur(isExp?null:item.id)}>{isExp?"▼":"▶"}</td>
                 <td style={{padding:"3px 6px",overflow:"hidden"}}><input style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></td>
                 <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent",width:"100%"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
-                <td style={{padding:"3px 6px",overflow:"hidden"}}><input style={{width:"100%",border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})}/></td>
+                <td style={{padding:"3px 6px",overflow:"hidden",background:dup?"#fee2e2":undefined}}><input title={dup?"⚠️ Duplicate BUR code":""} style={{width:"100%",border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:dup?"#b91c1c":"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.labour?item.labour:""} onChange={e=>updBur(item.id,{labour:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.material?item.material:""} onChange={e=>updBur(item.id,{material:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.plant?item.plant:""} onChange={e=>updBur(item.id,{plant:+e.target.value||0})}/></td>
@@ -716,7 +721,7 @@ export default function App(){
               </div>
 
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
-                <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{_q?"🔎 Search results (all categories)":catName(selCat)} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catTotal} items{catItems.length<catTotal?` (showing first ${catItems.length} — refine search)`:""}</span></span>
+                <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{_q?"🔎 Search results (all categories)":catName(selCat)} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catTotal} items{catItems.length<catTotal?` (showing first ${catItems.length} — refine search)`:""}</span>{dupCount>0&&<span style={{marginLeft:8,background:"#fee2e2",color:"#b91c1c",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>⚠️ {dupCount} duplicate code{dupCount>1?"s":""}</span>}</span>
                 <button onClick={()=>addBurItem(selCat)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Item</button>
               </div>
 
