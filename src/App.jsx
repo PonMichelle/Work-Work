@@ -101,8 +101,9 @@ export default function App(){
   const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("");
   const [costModal,setCostModal]=useState(null);
   const [cType,setCType]=useState("subcon");
-  const [cForm,setCForm]=useState({supplier:"",rate:"",date:"",note:"",imgs:[]});
+  const [cForm,setCForm]=useState({supplier:"",rate:"",date:"",location:"",note:"",imgs:[]});
   const [imgView,setImgView]=useState(null);
+  const [ceSort,setCeSort]=useState({by:"none",dir:1}); const [showGraph,setShowGraph]=useState(false);
   const [newCat,setNewCat]=useState(""); const [showNewCat,setShowNewCat]=useState(false);
   const [codes,setCodes]=useState(DEF_CODES);
   const [editCId,setEditCId]=useState(null); const [codeForm,setCodeForm]=useState({code:"",desc:"",cat:""}); const [showAddC,setShowAddC]=useState(false);
@@ -288,7 +289,7 @@ export default function App(){
       for(let gi=0;gi<groups.length;gi++){ const g=groups[gi]; const band=PAL[gi%PAL.length]; const rowTint=tint(band);
         ws.mergeCells(r,1,r,headers.length+12); const cc=ws.getCell(r,1); cc.value=g.name+"   ("+g.items.length+")"; cc.font={bold:true,size:12,color:{argb:"FF1E293B"}}; cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:band}}; cc.border=bd; ws.getRow(r).height=20; r++;
         for(let j=0;j<g.items.length;j++){ const it=g.items[j]; const fillArgb=(j%2===1)?rowTint:"FFFFFFFF";
-          const q=(it.costData||[]).filter(e=>e.component==="subcon").map(e=>`${e.supplier}: ${e.rate}${e.date?` (${e.date})`:""}`).join("  |  ");
+          const q=(it.costData||[]).filter(e=>e.component==="subcon").map(e=>`${e.supplier}: ${e.rate}${e.location?` @${e.location}`:""}${e.date?` (${e.date})`:""}`).join("  |  ");
           const total=+bTot(it)||0;
           const vals=[it.desc||"",it.unit||"",it.code||"",+it.labour||0,+it.material||0,+it.plant||0,+it.subcon||0,total,q];
           const row=ws.getRow(r);
@@ -360,9 +361,10 @@ export default function App(){
 
   // ── Cost data / quotes ──────────────────────────────────────────────────────
   const modalItem=costModal?burItems.find(b=>b.id===costModal):null;
-  const costEntries=modalItem?(modalItem.costData||[]).filter(e=>e.component===cType):[];
+  const costEntries=(()=>{ let arr=modalItem?(modalItem.costData||[]).filter(e=>e.component===cType):[]; if(ceSort.by!=="none"){ arr=[...arr].sort((a,b)=>{ if(ceSort.by==="rate")return ((+a.rate||0)-(+b.rate||0))*ceSort.dir; return String(a[ceSort.by]||"").localeCompare(String(b[ceSort.by]||""),undefined,{numeric:true})*ceSort.dir; }); } return arr; })();
+  const ceToggleSort=by=>setCeSort(s=>s.by===by?{by,dir:-s.dir}:{by,dir:1});
 
-  const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!cForm.rate){toast_("⚠️ Enter supplier and rate");return;} const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:+cForm.rate,date:cForm.date,note:cForm.note,imgs:cForm.imgs||[]}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",note:"",imgs:[]}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
+  const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!cForm.rate){toast_("⚠️ Enter supplier and rate");return;} const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:+cForm.rate,date:cForm.date,location:cForm.location||"",note:cForm.note,imgs:cForm.imgs||[]}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",location:"",note:"",imgs:[]}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
   const pickCostImg=useCallback(async files=>{ const list=files&&files.length!=null?[...files]:(files?[files]:[]); if(!list.length)return; const out=[]; for(const file of list){ const d=await imgToDataURL(file); if(d&&d.length<=1400000)out.push(d); else if(d)toast_("⚠️ One image too large, skipped"); } if(out.length)setCForm(f=>({...f,imgs:[...(f.imgs||[]),...out]})); },[toast_]);
   const delCostEntry=useCallback(eid=>{ const b=burItems.find(x=>x.id===costModal); if(!b)return; setBurField(costModal,{costData:(b.costData||[]).filter(e=>e.id!==eid)}); },[costModal,burItems]);
   // Edit an existing cost-data entry (optimistic local + debounced save)
@@ -885,12 +887,31 @@ export default function App(){
               );})}
             </div>
             <div style={{flex:1,overflow:"auto",padding:"16px 20px"}}>
+              {costEntries.length>0&&<div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8,fontSize:11,color:"#64748b",flexWrap:"wrap"}}>
+                <span style={{fontWeight:700}}>Sort:</span>
+                {[["supplier","Supplier"],["location","Location"],["rate","Rate"],["date","Date"]].map(([k,l])=><button key={k} onClick={()=>ceToggleSort(k)} style={{border:"1px solid #e2e8f0",background:ceSort.by===k?"#7c3aed":"#fff",color:ceSort.by===k?"#fff":"#475569",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>{l}{ceSort.by===k?(ceSort.dir===1?" ▲":" ▼"):""}</button>)}
+                <button onClick={()=>setShowGraph(g=>!g)} style={{marginLeft:8,border:"1px solid #e2e8f0",background:showGraph?"#16a34a":"#fff",color:showGraph?"#fff":"#475569",borderRadius:6,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:700}}>📈 Graph</button>
+              </div>}
+              {showGraph&&costEntries.length>0&&(()=>{ const data=[...costEntries].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))); const max=Math.max(...data.map(e=>+e.rate||0),1); const H=180,pad=34,step=Math.max(56,Math.min(90,520/data.length)),W=Math.max(300,data.length*step+30),bw=Math.min(46,step-14);
+                return <div style={{overflowX:"auto",marginBottom:14,border:"1px solid #e2e8f0",borderRadius:8,padding:10,background:"#fff"}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:4}}>{CLABEL[cType]} rate trend (by date)</div>
+                  <svg width={W} height={H}>
+                    <line x1={18} y1={H-pad} x2={W-6} y2={H-pad} stroke="#e2e8f0"/>
+                    {data.map((e,i)=>{ const x=24+i*step; const bh=(H-pad-22)*((+e.rate||0)/max); const y=H-pad-bh; return <g key={i}>
+                      <rect x={x} y={y} width={bw} height={bh} rx={3} fill="#7c3aed"/>
+                      <text x={x+bw/2} y={y-3} fontSize="10" textAnchor="middle" fill="#1e293b" fontWeight="700">{fmt(+e.rate||0)}</text>
+                      <text x={x+bw/2} y={H-pad+13} fontSize="9" textAnchor="middle" fill="#64748b">{(e.supplier||"").slice(0,9)}</text>
+                      <text x={x+bw/2} y={H-pad+24} fontSize="8" textAnchor="middle" fill="#94a3b8">{e.date||""}</text>
+                    </g>;})}
+                  </svg>
+                </div>;
+              })()}
               {costEntries.length===0?(
                 <div style={{textAlign:"center",padding:"28px 0",color:"#94a3b8",fontSize:13}}>No {CLABEL[cType]} entries yet — add one below</div>
               ):(
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:16}}>
                   <thead><tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:11}}>
-                    {["Supplier / Vendor","Rate (S$)","Date","Note","Photo",""].map((h,i)=><th key={i} style={{padding:"8px 10px",textAlign:i===1?"right":"left",fontWeight:600,borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}
+                    {["Supplier / Vendor","Rate (S$)","Date","Location","Note","Photo",""].map((h,i)=><th key={i} style={{padding:"8px 10px",textAlign:i===1?"right":"left",fontWeight:600,borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}
                   </tr></thead>
                   <tbody>
                     {costEntries.map(e=>(
@@ -898,6 +919,7 @@ export default function App(){
                         <td style={{padding:"6px 8px"}}><input value={e.supplier||""} onChange={ev=>updCostEntry(e.id,{supplier:ev.target.value})} style={{width:"100%",border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:12,fontWeight:600,color:"#1e293b",outline:"none",background:"#f8fafc"}}/></td>
                         <td style={{padding:"6px 8px",textAlign:"right"}}><input type="number" value={e.rate??""} onChange={ev=>updCostEntry(e.id,{rate:+ev.target.value||0})} style={{width:90,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:13,fontWeight:700,color:"#1d4ed8",outline:"none",textAlign:"right",background:"#f8fafc"}}/></td>
                         <td style={{padding:"6px 8px"}}><input value={e.date||""} placeholder="—" onChange={ev=>updCostEntry(e.id,{date:ev.target.value})} style={{width:80,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:12,color:"#64748b",outline:"none",background:"#f8fafc"}}/></td>
+                        <td style={{padding:"6px 8px"}}><input value={e.location||""} placeholder="—" onChange={ev=>updCostEntry(e.id,{location:ev.target.value})} style={{width:100,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:12,color:"#64748b",outline:"none",background:"#f8fafc"}}/></td>
                         <td style={{padding:"6px 8px"}}><input value={e.note||""} placeholder="—" onChange={ev=>updCostEntry(e.id,{note:ev.target.value})} style={{width:"100%",minWidth:90,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:11,color:"#64748b",outline:"none",background:"#f8fafc"}}/></td>
                         <td style={{padding:"6px 10px"}}><div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center",maxWidth:170}}>
                           {entryPhotos(e).map((p,i)=><span key={i} style={{position:"relative",display:"inline-flex"}}><img src={p} alt="" onClick={()=>setImgView(p)} style={{height:30,width:40,objectFit:"cover",borderRadius:3,cursor:"zoom-in",border:"1px solid #e2e8f0"}}/><button onClick={()=>removeEntryPhoto(e.id,i)} title="Remove photo" style={{position:"absolute",top:-6,right:-6,background:"#ef4444",color:"#fff",border:"none",borderRadius:"50%",width:15,height:15,fontSize:9,lineHeight:"15px",padding:0,cursor:"pointer"}}>✕</button></span>)}
@@ -916,8 +938,8 @@ export default function App(){
               )}
               <div style={{background:"#f8fafc",borderRadius:10,padding:14,border:"1px solid #e2e8f0"}}>
                 <div style={{fontSize:12,fontWeight:600,color:"#475569",marginBottom:10}}>+ Add {CLABEL[cType]} Quote / Price</div>
-                <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 2fr",gap:8,marginBottom:10}}>
-                  {[["supplier","Supplier / Vendor","text","e.g. ABC Contractors Pte Ltd"],["rate","Rate (S$)","number","0.00"],["date","Date","text","e.g. Jun 2025"],["note","Note","text","e.g. FOB, ex-GST"]].map(([k,l,t,ph])=>(
+                <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1.4fr 2fr",gap:8,marginBottom:10}}>
+                  {[["supplier","Supplier / Vendor","text","e.g. ABC Contractors Pte Ltd"],["rate","Rate (S$)","number","0.00"],["date","Date","text","e.g. Jun 2025"],["location","Location","text","e.g. Level 3 / Block A"],["note","Note","text","e.g. FOB, ex-GST"]].map(([k,l,t,ph])=>(
                     <div key={k}><div style={{fontSize:10,color:"#94a3b8",marginBottom:3,fontWeight:600}}>{l}</div>
                     <input type={t} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 9px",fontSize:12,outline:"none",boxSizing:"border-box"}} placeholder={ph} value={cForm[k]} onChange={e=>setCForm(f=>({...f,[k]:e.target.value}))}/></div>
                   ))}
@@ -928,7 +950,7 @@ export default function App(){
                   {(cForm.imgs||[]).map((p,i)=><span key={i} style={{display:"inline-flex",alignItems:"center",gap:3}}><img src={p} alt="" style={{height:38,width:50,objectFit:"cover",borderRadius:4,border:"1px solid #e2e8f0"}}/><button onClick={()=>setCForm(f=>({...f,imgs:f.imgs.filter((_,j)=>j!==i)}))} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:12,fontWeight:700}}>✕</button></span>)}
                 </div>
                 <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-                  <button onClick={()=>setCForm({supplier:"",rate:"",date:"",note:"",imgs:[]})} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"7px 14px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>
+                  <button onClick={()=>setCForm({supplier:"",rate:"",date:"",location:"",note:"",imgs:[]})} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"7px 14px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>
                   <button onClick={addCostEntry} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontSize:12,cursor:"pointer",fontWeight:600}}>Add Entry</button>
                 </div>
               </div>
