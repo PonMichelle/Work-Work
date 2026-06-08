@@ -10,8 +10,8 @@ const STATUSES=["Draft","Under Review","Confirmed"];
 const SS={Draft:{bg:"#f1f5f9",c:"#475569"},"Under Review":{bg:"#fef9c3",c:"#b45309"},Confirmed:{bg:"#dcfce7",c:"#15803d"}};
 const ROLES=["Lead QS","Estimator","PM","Client"];
 const TABS=[{id:"boq",label:"📋 BOQ"},{id:"bur",label:"📚 BUR"},{id:"rates",label:"🔢 Rates & Codes"},{id:"summary",label:"📊 Summary"},{id:"log",label:"📝 Activity"}];
-const ALL_COLS=[{id:"ref",label:"Ref",w:48},{id:"desc",label:"Description",w:190},{id:"unit",label:"Unit",w:64},{id:"qty",label:"Qty",w:56,num:1},{id:"rA",label:"Rate A",w:74,num:1},{id:"amtA",label:"Amt A (S$)",w:100,num:1},{id:"rB",label:"Rate B",w:74,num:1},{id:"amtB",label:"Amt B (S$)",w:100,num:1},{id:"code",label:"BUR Code",w:90},{id:"status",label:"Status",w:110},{id:"remarks",label:"Remarks",w:130},{id:"by",label:"By",w:56}];
-const DEF_COLS=new Set(["ref","desc","unit","qty","rA","amtA","rB","amtB","code","status","remarks","by"]);
+const ALL_COLS=[{id:"ref",label:"Ref",w:48},{id:"desc",label:"Description",w:190},{id:"unit",label:"Unit",w:64},{id:"qty",label:"Qty",w:56,num:1},{id:"rA",label:"Rate A",w:74,num:1},{id:"amtA",label:"Amt A (S$)",w:100,num:1},{id:"rB",label:"Rate B",w:74,num:1},{id:"amtB",label:"Amt B (S$)",w:100,num:1},{id:"code",label:"BUR Code",w:90},{id:"remarks",label:"Remarks",w:130},{id:"by",label:"By",w:56}];
+const DEF_COLS=new Set(["ref","desc","unit","qty","rA","amtA","rB","amtB","code","remarks","by"]);
 const DEF_CODES=[{id:"dc1",code:"PRELIM",desc:"Preliminaries",cat:"Prelim"},{id:"dc2",code:"BLDG-A",desc:"Building Works Phase A",cat:"Building"},{id:"dc3",code:"BLDG-B",desc:"Building Works Phase B",cat:"Building"},{id:"dc4",code:"EXT-A",desc:"External Works Phase A",cat:"External"},{id:"dc5",code:"EXT-B",desc:"External Works Phase B",cat:"External"},{id:"dc6",code:"ME-ACMV",desc:"Air Conditioning & Mech Ventilation",cat:"M&E"},{id:"dc7",code:"ME-ELV",desc:"Electrical & Low Voltage",cat:"M&E"},{id:"dc8",code:"ME-FP",desc:"Fire Protection",cat:"M&E"},{id:"dc9",code:"ME-STP",desc:"Sewage Treatment Plant",cat:"M&E"},{id:"dc10",code:"FEES",desc:"Professional Fees",cat:"Fees"}];
 const DEF_CATS=["Concrete Works","Formwork","Reinforcement","Brickwork & Blockwork","Waterproofing","Structural Steelwork","Floor & Wall Finishes","Roofing","Doors, Windows & Glazing","External Works","M&E Works","Preliminaries","Others"].map((name,i)=>({id:`cat${i+1}`,name}));
 const MASTER_CAT={id:"cat_master",name:"Master BUR"};
@@ -37,6 +37,20 @@ const newSections=()=>SECTIONS.map(s=>({...s,items:[]}));
 const fmt=n=>(n||0).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFractionDigits:2});
 const uid=()=>"_"+Math.random().toString(36).slice(2,10);
 const bTot=b=>{const d=(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0),oh=d*(+b.oh||0)/100,s=d+oh;return s*(1+(+b.profit||0)/100);};
+// Custom BOQ columns: compute each column's value per row. Formula columns can reference
+// qty, rateA, rateB, amtA, amtB, and earlier custom columns (by sanitised name).
+const sanitizeVar=l=>"c_"+String(l||"").replace(/[^a-zA-Z0-9]/g,"_");
+function computeCols(item,cols){
+  const vals={qty:+item.qty||0,rA:+item.rA||0,rB:+item.rB||0,rateA:+item.rA||0,rateB:+item.rB||0,amtA:(+item.qty||0)*(+item.rA||0),amtB:(+item.qty||0)*(+item.rB||0)};
+  const out={};
+  for(const c of (cols||[])){
+    if(c.formula){
+      try{const f=new Function(...Object.keys(vals),`return (${c.formula});`);const r=f(...Object.values(vals));out[c.id]=r;vals[sanitizeVar(c.label)]=(typeof r==="number"&&isFinite(r))?r:(parseFloat(r)||0);}
+      catch{out[c.id]="ERR";vals[sanitizeVar(c.label)]=0;}
+    }else{const v=item.cx?.[c.id]??"";out[c.id]=v;vals[sanitizeVar(c.label)]=parseFloat(v)||0;}
+  }
+  return out;
+}
 const authErrMsg=e=>{const c=(e&&e.code)||"";if(c.includes("invalid-cred")||c.includes("wrong-password")||c.includes("user-not-found"))return"Incorrect email or password.";if(c.includes("invalid-email"))return"That doesn't look like a valid email.";if(c.includes("too-many"))return"Too many attempts — try again later.";if(c.includes("network"))return"Network error — check your connection.";return"Sign-in failed. "+(e&&e.message||"");};
 
 export default function App(){
@@ -115,15 +129,15 @@ export default function App(){
   useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","log"),s=>{ const e=s.exists()?(s.data().entries||[]):[]; logRef.current=e; setLog(e); }); },[ready]);
 
   // Current project's BOQ
-  useEffect(()=>{ if(!ready||!pid){setData(null);return;} return onSnapshot(doc(db,"projects",pid),s=>{ if(!s.exists())return; if(dirtyRef.current)return; const d=s.data(); setData({sections:d.sections||newSections(),ts:d.ts||0}); }); },[ready,pid]);
+  useEffect(()=>{ if(!ready||!pid){setData(null);return;} return onSnapshot(doc(db,"projects",pid),s=>{ if(!s.exists())return; if(dirtyRef.current)return; const d=s.data(); setData({sections:d.sections||newSections(),cols:d.cols||[],ts:d.ts||0}); }); },[ready,pid]);
 
   // ── Project ops ─────────────────────────────────────────────────────────────
-  const createProject=async()=>{ const name=prompt("New project / tender name:"); if(!name||!name.trim())return; const ref=doc(collection(db,"projects")); try{ await setDoc(ref,{name:name.trim(),createdAt:Date.now(),sections:newSections(),ts:Date.now()}); setPid(ref.id); setTab("boq"); addLogEntry(`Created project "${name.trim()}"`);}catch(e){toast_("⚠️ "+e.message);} };
+  const createProject=async()=>{ const name=prompt("New project / tender name:"); if(!name||!name.trim())return; const ref=doc(collection(db,"projects")); try{ await setDoc(ref,{name:name.trim(),createdAt:Date.now(),sections:newSections(),cols:[],ts:Date.now()}); setPid(ref.id); setTab("boq"); addLogEntry(`Created project "${name.trim()}"`);}catch(e){toast_("⚠️ "+e.message);} };
   const renameProject=async()=>{ const cur=projects?.find(p=>p.id===pid); const name=prompt("Rename project:",cur?.name||""); if(!name||!name.trim())return; try{await updateDoc(doc(db,"projects",pid),{name:name.trim()});}catch(e){toast_("⚠️ "+e.message);} };
   const deleteProject=async()=>{ if(!pid)return; const cur=projects?.find(p=>p.id===pid); if(!confirm(`Delete project "${cur?.name}" and all its BOQ items? This cannot be undone.`))return; try{await deleteDoc(doc(db,"projects",pid)); setPid(null);}catch(e){toast_("⚠️ "+e.message);} };
 
   // ── BOQ writes ──────────────────────────────────────────────────────────────
-  const writeProject=nd=>{ if(!pidRef.current)return; setDoc(doc(db,"projects",pidRef.current),{sections:nd.sections,ts:Date.now()},{merge:true}).catch(()=>{}); };
+  const writeProject=nd=>{ if(!pidRef.current)return; setDoc(doc(db,"projects",pidRef.current),{sections:nd.sections,cols:nd.cols||[],ts:Date.now()},{merge:true}).catch(()=>{}); };
   const pushData=useCallback((nd,action)=>{ dirtyRef.current=false; setData({...nd}); writeProject(nd); if(action)addLogEntry(action); },[addLogEntry]);
 
   const addItem=useCallback(sid=>{ if(!data)return; const nd=JSON.parse(JSON.stringify(data)); const sec=nd.sections.find(s=>s.id===sid); if(sec){sec.items.push({id:uid(),ref:"",desc:"New item",unit:"sum",qty:1,rA:0,rB:0,code:"",status:"Draft",remarks:"",by:uRef.current?.name}); pushData(nd,`Added item in ${sec.name}`);} },[data,pushData]);
@@ -138,6 +152,27 @@ export default function App(){
   const delItem=useCallback((sid,iid)=>{ if(!data)return; const nd=JSON.parse(JSON.stringify(data)); const sec=nd.sections.find(s=>s.id===sid); const item=sec?.items.find(i=>i.id===iid); if(sec&&item){ sec.items=sec.items.filter(i=>i.id!==iid); pushData(nd,`Deleted item in ${sec.name}`);} },[data,pushData]);
 
   const blurSave=useCallback((sid,iid,code)=>{ if(code){const m=burItems.find(b=>b.code&&b.code.toLowerCase()===code.toLowerCase()); if(m&&bTot(m)>0)setRateSugg({secId:sid,iid,rate:bTot(m),code:m.code,desc:m.desc});} },[burItems]);
+
+  // Custom BOQ columns (Excel-style)
+  const addCol=useCallback(()=>{
+    if(!data)return;
+    const label=prompt("New column name (e.g. 'Wastage Amt'):"); if(!label||!label.trim())return;
+    const formula=prompt("Optional formula — leave BLANK for a column you type into.\n\nYou can use: qty, rateA, rateB, amtA, amtB, and other column names.\nExample:  qty*rateA*1.1","");
+    const nd=JSON.parse(JSON.stringify(data)); nd.cols=[...(nd.cols||[]),{id:uid(),label:label.trim(),formula:(formula||"").trim()}];
+    pushData(nd,`Added column "${label.trim()}"`);
+  },[data,pushData]);
+  const delCol=useCallback(cid=>{ if(!data||!confirm("Delete this column?"))return; const nd=JSON.parse(JSON.stringify(data)); nd.cols=(nd.cols||[]).filter(c=>c.id!==cid); pushData(nd,"Deleted a column"); },[data,pushData]);
+
+  // Export the whole BUR library to a CSV (opens in Excel)
+  const exportBUR=useCallback(()=>{
+    const cn=id=>cats.find(c=>c.id===id)?.name||id;
+    const esc=v=>{const s=String(v??"");return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+    const head=["Category","Code","Description","Unit","Labour","Material","Plant","Subcon","OH%","Profit%","Total Rate","Sub-Con Quotes"];
+    const rows=burItems.map(b=>{const q=(b.costData||[]).filter(e=>e.component==="subcon").map(e=>`${e.supplier}:${e.rate}${e.date?` (${e.date})`:""}`).join(" | ");return [cn(b.catId),b.code,b.desc,b.unit,b.labour,b.material,b.plant,b.subcon,b.oh,b.profit,bTot(b).toFixed(2),q];});
+    const csv="﻿"+[head,...rows].map(r=>r.map(esc).join(",")).join("\r\n");
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR_export.csv"; a.click(); URL.revokeObjectURL(url);
+    toast_(`✅ Exported ${rows.length} BUR items to Excel (CSV)`);
+  },[burItems,cats,toast_]);
 
   // ── BUR writes (per-document in shared library) ─────────────────────────────
   const addBurItem=useCallback(async catId=>{ const ref=doc(collection(db,"bur")); try{ await setDoc(ref,{catId,code:"",desc:"New Item",unit:"sum",labour:0,material:0,plant:0,subcon:0,oh:15,profit:10,costData:[],quote:null,group:""}); setExpBur(ref.id);}catch(e){toast_("⚠️ "+e.message);} },[]);
@@ -277,8 +312,9 @@ export default function App(){
   const displayCats=cats;
   const catName=id=>displayCats.find(c=>c.id===id)?.name||id;
   const BUR_MAX=200; const _q=burSearch.trim().toLowerCase();
-  const _allCat=burItems.filter(b=>b.catId===selCat);
-  const _filtered=_q?_allCat.filter(b=>(b.code||"").toLowerCase().includes(_q)||(b.desc||"").toLowerCase().includes(_q)):_allCat;
+  // When searching, look across the WHOLE BUR library; otherwise show the selected category.
+  const _base=_q?burItems:burItems.filter(b=>b.catId===selCat);
+  const _filtered=_q?_base.filter(b=>(b.code||"").toLowerCase().includes(_q)||(b.desc||"").toLowerCase().includes(_q)):_base;
   const _sorted=[..._filtered].sort((a,b)=>{
     let av,bv;
     if(sortBy==="rate"){av=bTot(a);bv=bTot(b);return (av-bv)*sortDir;}
@@ -350,18 +386,20 @@ export default function App(){
                         {ALL_COLS.map(col=><label key={col.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 2px",cursor:"pointer",fontSize:12}}><input type="checkbox" checked={visCols.has(col.id)} onChange={()=>toggleCol(col.id)} style={{accentColor:"#2563eb"}}/>{col.label}</label>)}
                       </div>}
                     </div>
+                    <button onClick={addCol} style={{background:"#0d9488",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>＋ Insert Column</button>
                     <button onClick={()=>addItem(cs.id)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Row</button>
                   </div>
                 </div>
                 <div style={{overflowX:"auto"}}>
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                     <thead><tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:11}}>
-                      {vcols.map(col=><th key={col.id} style={{padding:"8px 8px",textAlign:col.num||col.id==="by"?"right":col.id==="status"||col.id==="unit"?"center":"left",fontWeight:600,whiteSpace:"nowrap",borderBottom:"1px solid #e2e8f0",minWidth:col.w}}>{col.label}</th>)}
+                      {vcols.map(col=><th key={col.id} style={{padding:"8px 8px",textAlign:col.num||col.id==="by"?"right":col.id==="unit"?"center":"left",fontWeight:600,whiteSpace:"nowrap",borderBottom:"1px solid #e2e8f0",minWidth:col.w}}>{col.label}</th>)}
+                      {(data.cols||[]).map(c=><th key={c.id} style={{padding:"8px 8px",textAlign:"right",fontWeight:600,whiteSpace:"nowrap",borderBottom:"1px solid #e2e8f0",minWidth:90,color:"#0f766e"}} title={c.formula?`= ${c.formula}`:"manual entry"}>{c.label}{c.formula?" ƒ":""} <button onClick={()=>delCol(c.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:11,fontWeight:700}}>✕</button></th>)}
                       <th style={{padding:"8px 6px",borderBottom:"1px solid #e2e8f0",width:28}}></th>
                     </tr></thead>
                     <tbody>
-                      {!cs.items?.length?<tr><td colSpan={vcols.length+1} style={{padding:"32px",textAlign:"center",color:"#94a3b8",fontSize:13}}>No items — click + Add Row</td></tr>
-                      :cs.items.map(item=>(
+                      {!cs.items?.length?<tr><td colSpan={vcols.length+(data.cols?.length||0)+1} style={{padding:"32px",textAlign:"center",color:"#94a3b8",fontSize:13}}>No items — click + Add Row</td></tr>
+                      :cs.items.map(item=>{ const cxv=computeCols(item,data.cols); return (
                         <tr key={item.id} style={{borderBottom:"1px solid #f8fafc"}}>
                           {vcols.map(col=>{
                             const p={padding:"4px 6px"};
@@ -379,9 +417,12 @@ export default function App(){
                             if(col.id==="by")return<td key={col.id} style={{...p,textAlign:"right",color:"#94a3b8",fontSize:10}}>{item.by||"—"}</td>;
                             return null;
                           })}
+                          {(data.cols||[]).map(c=>c.formula
+                            ?<td key={c.id} style={{padding:"4px 6px",textAlign:"right",color:"#0f766e",fontWeight:600,whiteSpace:"nowrap"}}>{typeof cxv[c.id]==="number"?fmt(cxv[c.id]):cxv[c.id]}</td>
+                            :<td key={c.id} style={{padding:"4px 6px"}}><input style={{width:90,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.cx?.[c.id]??""} onChange={e=>updItem(cs.id,item.id,{cx:{...(item.cx||{}),[c.id]:e.target.value}})} onBlur={()=>blurSave(cs.id,item.id,item.code)}/></td>)}
                           <td style={{padding:"4px 4px",textAlign:"center"}}><button onClick={()=>delItem(cs.id,item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></td>
                         </tr>
-                      ))}
+                      );})}
                     </tbody>
                     {cs.items?.length>0&&<tfoot><tr style={{background:"#eff6ff",fontWeight:700}}>
                       {vcols.map(col=>{
@@ -389,7 +430,7 @@ export default function App(){
                         if(col.id==="amtA")return<td key={col.id} style={{padding:"8px",textAlign:"right",fontSize:13,color:"#1d4ed8"}}>S$ {fmt(sTot(cs.id).A)}</td>;
                         if(col.id==="amtB")return<td key={col.id} style={{padding:"8px",textAlign:"right",fontSize:13,color:"#7c3aed"}}>S$ {fmt(sTot(cs.id).B)}</td>;
                         return<td key={col.id} style={{padding:"8px"}}></td>;
-                      })}<td></td>
+                      })}{(data.cols||[]).map(c=><td key={c.id} style={{padding:"8px"}}></td>)}<td></td>
                     </tr></tfoot>}
                   </table>
                 </div>
@@ -418,6 +459,7 @@ export default function App(){
               <input value={burSearch} onChange={e=>setBurSearch(e.target.value)} placeholder="🔍 Search code or description…" style={{flex:1,minWidth:200,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none"}}/>
               {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
               <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
+              <button onClick={exportBUR} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⤓ Export Excel</button>
               <button onClick={loadMaster} style={{background:"#1e3a5f",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⬇ Load master list ({burSeed.items.length})</button>
             </div>
 
@@ -430,7 +472,7 @@ export default function App(){
             </div>
 
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
-              <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{catName(selCat)} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catTotal} items{catItems.length<catTotal?` (showing first ${catItems.length} — refine search)`:""}</span></span>
+              <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{_q?"🔎 Search results (all categories)":catName(selCat)} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catTotal} items{catItems.length<catTotal?` (showing first ${catItems.length} — refine search)`:""}</span></span>
               <button onClick={()=>addBurItem(selCat)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Item</button>
             </div>
 
@@ -622,12 +664,6 @@ export default function App(){
                 </table>
               </div>
             )}
-            <div style={{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>
-              <div style={{fontWeight:700,fontSize:13,marginBottom:12}}>Item Status</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
-                {STATUSES.map(s=>{const n=data.sections.reduce((a,sec)=>a+(sec.items?.filter(i=>i.status===s).length||0),0),st=SS[s];return(<div key={s} style={{background:st.bg,borderRadius:10,padding:"14px 10px",textAlign:"center"}}><div style={{fontSize:26,fontWeight:800,color:st.c}}>{n}</div><div style={{fontSize:11,fontWeight:600,color:st.c,marginTop:2}}>{s}</div></div>);})}
-              </div>
-            </div>
           </div>
         )}
 
