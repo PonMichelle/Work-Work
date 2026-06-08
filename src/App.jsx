@@ -460,6 +460,8 @@ export default function App(){
   });
   const catTotal=_sorted.length; const catItems=_sorted.slice(0,BUR_MAX);
   const toggleSort=f=>{ if(sortBy===f)setSortDir(d=>-d); else{setSortBy(f);setSortDir(1);} };
+  const renameCat=cid=>{ const c=cats.find(x=>x.id===cid); if(!c)return; const nm=prompt("Rename category:",c.name); if(nm&&nm.trim())pushCats(cats.map(x=>x.id===cid?{...x,name:nm.trim()}:x)); };
+  const delCat=cid=>{ const n=burItems.filter(b=>b.catId===cid).length; if(n>0){alert(`This category has ${n} item(s). Move them to another category first (open an item → CATEGORY), then delete.`);return;} if(confirm("Delete this empty category?")){ pushCats(cats.filter(x=>x.id!==cid)); if(selCat===cid){const o=cats.find(x=>x.id!==cid); setSelCat(o?o.id:"");} } };
   const burCw=k=>burColW[k]??({desc:360,unit:60,code:150,labour:90,material:95,plant:80,rate:100,cd:90}[k]||80);
   const startBurDrag=(k,e)=>{ e.preventDefault();e.stopPropagation(); burDragRef.current={k,start:e.clientX,startW:burCw(k)}; };
   const burHead=[["desc","Description","left"],["unit","Unit","left"],["code","BUR Code","left"],["labour","Labour","right"],["material","Material","right"],["plant","Plant","right"],["rate","Rate (S$)","right"],["cd","Cost Data","center"]];
@@ -667,10 +669,14 @@ export default function App(){
             {/* Left vertical category sidebar */}
             <div style={{width:208,flexShrink:0,background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",maxHeight:"80vh",overflow:"auto",padding:8}}>
               <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",padding:"4px 8px",letterSpacing:".5px"}}>CATEGORIES</div>
-              {displayCats.map(c=>{const n=burItems.filter(b=>b.catId===c.id).length; return(
-                <button key={c.id} onClick={()=>setSelCat(c.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,width:"100%",textAlign:"left",padding:"7px 10px",borderRadius:8,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",marginBottom:2,background:selCat===c.id?"#1e3a5f":"transparent",color:selCat===c.id?"#fff":"#475569"}}>
-                  <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</span><span style={{opacity:.7,fontSize:10,flexShrink:0}}>{n}</span>
-                </button>);})}
+              {displayCats.map(c=>{const n=burItems.filter(b=>b.catId===c.id).length; const sel=selCat===c.id; return(
+                <div key={c.id} style={{display:"flex",alignItems:"center",gap:2,marginBottom:2,borderRadius:8,background:sel?"#7c3aed":"transparent"}}>
+                  <button onClick={()=>setSelCat(c.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,flex:1,minWidth:0,textAlign:"left",padding:"7px 10px",borderRadius:8,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",background:"transparent",color:sel?"#fff":"#475569"}}>
+                    <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</span><span style={{opacity:.7,fontSize:10,flexShrink:0}}>{n}</span>
+                  </button>
+                  <button onClick={()=>renameCat(c.id)} title="Rename" style={{border:"none",background:"none",cursor:"pointer",fontSize:11,padding:"2px 3px",color:sel?"#e9d5ff":"#94a3b8"}}>✎</button>
+                  <button onClick={()=>delCat(c.id)} title="Delete (if empty)" style={{border:"none",background:"none",cursor:"pointer",fontSize:11,padding:"2px 5px 2px 2px",color:sel?"#fecaca":"#cbd5e1"}}>✕</button>
+                </div>);})}
               {showNewCat?(
                 <div style={{display:"flex",flexDirection:"column",gap:4,padding:"6px 4px"}}>
                   <input style={{border:"1px solid #e2e8f0",borderRadius:7,padding:"5px 9px",fontSize:12,outline:"none"}} placeholder="Category name" value={newCat} onChange={e=>setNewCat(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&newCat.trim()){pushCats([...cats,{id:uid(),name:newCat.trim()}]);setNewCat("");setShowNewCat(false);}}}/>
