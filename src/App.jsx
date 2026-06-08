@@ -10,7 +10,7 @@ const UNITS=["m²","m³","m","nr","sum","lot","kg","t","m run","%","item"];
 const STATUSES=["Draft","Under Review","Confirmed"];
 const SS={Draft:{bg:"#f1f5f9",c:"#475569"},"Under Review":{bg:"#fef9c3",c:"#b45309"},Confirmed:{bg:"#dcfce7",c:"#15803d"}};
 const ROLES=["Lead QS","Estimator","PM","Client"];
-const TABS=[{id:"boq",label:"📋 BOQ"},{id:"bur",label:"📚 BUR"},{id:"rates",label:"🔢 Rates & Codes"},{id:"summary",label:"📊 Summary"},{id:"log",label:"📝 Activity"}];
+const TABS=[{id:"boq",label:"📋 BOQ"},{id:"bur",label:"📚 BUR"},{id:"summary",label:"📊 Summary"},{id:"log",label:"📝 Activity"}];
 const ALL_COLS=[{id:"ref",label:"Ref",w:48},{id:"desc",label:"Description",w:190},{id:"unit",label:"Unit",w:64},{id:"qty",label:"Qty",w:56,num:1},{id:"rA",label:"Rate A",w:74,num:1},{id:"amtA",label:"Amt A (S$)",w:100,num:1},{id:"rB",label:"Rate B",w:74,num:1},{id:"amtB",label:"Amt B (S$)",w:100,num:1},{id:"code",label:"BUR Code",w:90},{id:"remarks",label:"Remarks",w:130},{id:"by",label:"By",w:56}];
 const DEF_COLS=new Set(["ref","desc","unit","qty","rA","amtA","rB","amtB","code","remarks","by"]);
 const DEF_CODES=[{id:"dc1",code:"PRELIM",desc:"Preliminaries",cat:"Prelim"},{id:"dc2",code:"BLDG-A",desc:"Building Works Phase A",cat:"Building"},{id:"dc3",code:"BLDG-B",desc:"Building Works Phase B",cat:"Building"},{id:"dc4",code:"EXT-A",desc:"External Works Phase A",cat:"External"},{id:"dc5",code:"EXT-B",desc:"External Works Phase B",cat:"External"},{id:"dc6",code:"ME-ACMV",desc:"Air Conditioning & Mech Ventilation",cat:"M&E"},{id:"dc7",code:"ME-ELV",desc:"Electrical & Low Voltage",cat:"M&E"},{id:"dc8",code:"ME-FP",desc:"Fire Protection",cat:"M&E"},{id:"dc9",code:"ME-STP",desc:"Sewage Treatment Plant",cat:"M&E"},{id:"dc10",code:"FEES",desc:"Professional Fees",cat:"Fees"}];
@@ -36,6 +36,8 @@ const CLABEL={labour:"Labour",material:"Material",plant:"Plant",subcon:"Subcon /
 
 const newSections=()=>SECTIONS.map(s=>({...s,items:[]}));
 const fmt=n=>(n||0).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFractionDigits:2});
+// Resize/compress an image File or Blob to a small JPEG data URL (for storing quote photos).
+const imgToDataURL=blob=>new Promise(res=>{ if(!blob){res("");return;} const fr=new FileReader(); fr.onload=()=>{ const im=new Image(); im.onload=()=>{ const max=1100; let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",0.7));}catch{res("");} }; im.onerror=()=>res(""); im.src=fr.result; }; fr.onerror=()=>res(""); fr.readAsDataURL(blob); });
 const uid=()=>"_"+Math.random().toString(36).slice(2,10);
 const bTot=b=>{const d=(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0),oh=d*(+b.oh||0)/100,s=d+oh;return s*(1+(+b.profit||0)/100);};
 // Custom BOQ columns: compute each column's value per row. Formula columns can reference
@@ -94,7 +96,8 @@ export default function App(){
   const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("");
   const [costModal,setCostModal]=useState(null);
   const [cType,setCType]=useState("subcon");
-  const [cForm,setCForm]=useState({supplier:"",rate:"",date:"",note:""});
+  const [cForm,setCForm]=useState({supplier:"",rate:"",date:"",note:"",img:""});
+  const [imgView,setImgView]=useState(null);
   const [newCat,setNewCat]=useState(""); const [showNewCat,setShowNewCat]=useState(false);
   const [codes,setCodes]=useState(DEF_CODES);
   const [editCId,setEditCId]=useState(null); const [codeForm,setCodeForm]=useState({code:"",desc:"",cat:""}); const [showAddC,setShowAddC]=useState(false);
@@ -297,9 +300,10 @@ export default function App(){
   const modalItem=costModal?burItems.find(b=>b.id===costModal):null;
   const costEntries=modalItem?(modalItem.costData||[]).filter(e=>e.component===cType):[];
 
-  const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!cForm.rate){toast_("⚠️ Enter supplier and rate");return;} const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:+cForm.rate,date:cForm.date,note:cForm.note}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",note:""}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
+  const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!cForm.rate){toast_("⚠️ Enter supplier and rate");return;} const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:+cForm.rate,date:cForm.date,note:cForm.note,img:cForm.img||""}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",note:"",img:""}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
+  const pickCostImg=useCallback(async file=>{ if(!file)return; const d=await imgToDataURL(file); if(!d){toast_("⚠️ Could not read image");return;} if(d.length>1400000){toast_("⚠️ Image too large — use a smaller crop");return;} setCForm(f=>({...f,img:d})); },[toast_]);
   const delCostEntry=useCallback(eid=>{ const b=burItems.find(x=>x.id===costModal); if(!b)return; setBurField(costModal,{costData:(b.costData||[]).filter(e=>e.id!==eid)}); },[costModal,burItems]);
-  const useCostEntry=useCallback(entry=>{ setBurField(costModal,{subcon:entry.rate,quote:{supplier:entry.supplier,rate:entry.rate,date:entry.date||"",note:entry.note||"",status:"pending",approvedBy:null,approvedAt:null}}); toast_("🟡 Rate set as Sub-Con Quotation — pending Lead QS approval"); },[costModal]);
+  const useCostEntry=useCallback(entry=>{ setBurField(costModal,{subcon:entry.rate,quote:null}); toast_(`✅ Sub-con rate set: S$ ${fmt(entry.rate)} (${entry.supplier})`); },[costModal]);
   const approveQuote=useCallback(id=>{ if(!uRef.current)return; const b=burItems.find(x=>x.id===id); if(!b||!b.quote)return; setBurField(id,{quote:{...b.quote,status:"approved",approvedBy:uRef.current.name,approvedAt:new Date().toLocaleString("en-SG")}}); toast_(`✅ Approved by ${uRef.current.name}`); },[burItems]);
   const rejectQuote=useCallback(id=>{ setBurField(id,{subcon:0,quote:null}); toast_("🔴 Quote rejected and cleared"); },[]);
 
@@ -600,7 +604,7 @@ export default function App(){
                   const total=bTot(item);
                   const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0);
                   return(
-                    <div key={item.id} style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden",border:isPending?"1.5px solid #fcd34d":isApproved?"1.5px solid #86efac":"none"}}>
+                    <div key={item.id} style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden"}}>
                       <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",cursor:"pointer"}} onClick={()=>setExpBur(isExp?null:item.id)}>
                         <span style={{fontSize:12,color:isExp?"#2563eb":"#cbd5e1",flexShrink:0}}>{isExp?"▼":"▶"}</span>
                         <div style={{flex:1,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",minWidth:0}}>
@@ -610,9 +614,7 @@ export default function App(){
                           <span style={{fontSize:11,color:"#94a3b8",flexShrink:0}}>{item.unit}</span>
                           <div style={{display:"flex",gap:8,fontSize:11,flexShrink:0,flexWrap:"wrap"}}>
                             {COMPS.map(k=>+item[k]>0&&k!=="subcon"&&<span key={k} style={{color:"#64748b"}}>{k[0].toUpperCase()}:{fmt(item[k])}</span>)}
-                            {isPending&&<span style={{background:"#fef08a",padding:"1px 6px",borderRadius:4,fontWeight:700,color:"#b45309"}}>🟡 SC Pending</span>}
-                            {isApproved&&<span style={{background:"#bbf7d0",padding:"1px 6px",borderRadius:4,fontWeight:700,color:"#15803d"}}>✅ SC Approved</span>}
-                            {!isPending&&!isApproved&&item.subcon>0&&<span style={{color:"#7c3aed"}}>SC:{fmt(item.subcon)}</span>}
+                            {item.subcon>0&&<span style={{color:"#7c3aed"}}>SC:{fmt(item.subcon)}</span>}
                           </div>
                           <span style={{fontWeight:700,fontSize:13,color:"#1d4ed8",flexShrink:0}}>S$ {fmt(total)}/{item.unit}</span>
                         </div>
@@ -639,9 +641,7 @@ export default function App(){
                                     {CLABEL[k].toUpperCase()}
                                     <button onClick={e=>{e.stopPropagation();setCostModal(item.id);setCType(k);}} style={{fontSize:9,background:hasCostData?"#fef9c3":"#f1f5f9",border:"none",borderRadius:3,padding:"1px 5px",cursor:"pointer",color:hasCostData?"#92400e":"#64748b",fontWeight:600}}>📊{hasCostData?` ${hasCostData}`:""}</button>
                                   </label>
-                                  <input type="number" style={{width:"100%",border:k==="subcon"&&isPending?"1.5px solid #f59e0b":k==="subcon"&&isApproved?"1.5px solid #16a34a":"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",background:k==="subcon"&&isPending?"#fffbeb":k==="subcon"&&isApproved?"#f0fdf4":"#fff"}} value={item[k]??""} onChange={e=>updBur(item.id,{[k]:+e.target.value||0})}/>
-                                  {k==="subcon"&&isPending&&<div style={{fontSize:9,color:"#b45309",marginTop:2,fontWeight:600}}>🟡 {item.quote.supplier} · {item.quote.date}</div>}
-                                  {k==="subcon"&&isApproved&&<div style={{fontSize:9,color:"#15803d",marginTop:2,fontWeight:600}}>✅ Approved · {item.quote.approvedBy}</div>}
+                                  <input type="number" style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",background:"#fff"}} value={item[k]??""} onChange={e=>updBur(item.id,{[k]:+e.target.value||0})}/>
                                 </div>
                               );
                             })}
@@ -655,18 +655,6 @@ export default function App(){
                             </div>
                             <span style={{fontSize:15,fontWeight:800,color:"#1d4ed8"}}>Total Rate: S$ {fmt(total)} / {item.unit}</span>
                           </div>
-                          {isPending&&(
-                            <div style={{marginTop:10,background:"#fffbeb",borderRadius:8,padding:"10px 14px",border:"1px solid #fde68a",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-                              <div><span style={{fontSize:12,fontWeight:700,color:"#92400e"}}>🟡 Sub-Con Quotation Pending: </span><span style={{fontSize:12,color:"#92400e"}}>S$ {fmt(item.quote.rate)} · {item.quote.supplier} · {item.quote.date}</span></div>
-                              {user.role==="Lead QS"?(
-                                <div style={{display:"flex",gap:6}}>
-                                  <button onClick={()=>approveQuote(item.id)} style={{background:"#16a34a",color:"#fff",border:"none",borderRadius:6,padding:"5px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>✓ Approve</button>
-                                  <button onClick={()=>rejectQuote(item.id)} style={{background:"#ef4444",color:"#fff",border:"none",borderRadius:6,padding:"5px 10px",fontSize:12,cursor:"pointer"}}>✕ Reject</button>
-                                </div>
-                              ):<span style={{fontSize:11,color:"#92400e",fontStyle:"italic"}}>Awaiting Lead QS approval</span>}
-                            </div>
-                          )}
-                          {isApproved&&<div style={{marginTop:10,background:"#f0fdf4",borderRadius:8,padding:"9px 14px",border:"1px solid #86efac",fontSize:12,color:"#15803d",fontWeight:600}}>✅ Sub-Con Quote Approved: S$ {fmt(item.quote.rate)} · {item.quote.supplier} · Approved by {item.quote.approvedBy} on {item.quote.approvedAt}</div>}
                         </div>
                       )}
                     </div>
@@ -764,15 +752,6 @@ export default function App(){
                 <tbody>{Object.keys(cc).length===0?<tr><td colSpan={5} style={{padding:24,textAlign:"center",color:"#94a3b8"}}>No BUR codes assigned yet</td></tr>:Object.entries(cc).sort((a,b)=>a[0].localeCompare(b[0])).map(([code,v])=><tr key={code} style={{borderBottom:"1px solid #f8fafc"}}><td style={{padding:"9px 16px",fontWeight:700,fontFamily:"monospace",color:"#1d4ed8"}}>{code}</td><td style={{padding:"9px 16px",color:"#64748b"}}>{v.n}</td><td style={{padding:"9px 16px",textAlign:"right",color:"#1d4ed8"}}>{fmt(v.A)}</td><td style={{padding:"9px 16px",textAlign:"right",color:"#7c3aed"}}>{fmt(v.B)}</td><td style={{padding:"9px 16px",textAlign:"right",fontWeight:700}}>{fmt(v.A+v.B)}</td></tr>)}</tbody>
               </table>
             </div>
-            {burItems.some(b=>b.quote?.status==="pending")&&(
-              <div style={{background:"#fffbeb",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden",border:"1.5px solid #fcd34d"}}>
-                <div style={{padding:"12px 16px",borderBottom:"1px solid #fde68a",display:"flex",justifyContent:"space-between"}}><span style={{fontWeight:700,fontSize:14}}>🟡 Pending Sub-Con Approvals</span><span style={{fontSize:12,color:"#92400e",fontWeight:600}}>{burItems.filter(b=>b.quote?.status==="pending").length} items</span></div>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                  <thead><tr style={{background:"#fef9c3",color:"#92400e",fontSize:11}}>{["Code","Description","Supplier","Date","Rate (S$)",""].map((h,i)=><th key={i} style={{padding:"8px 12px",textAlign:i>=4?"right":"left",fontWeight:600,borderBottom:"1px solid #fde68a"}}>{h}</th>)}</tr></thead>
-                  <tbody>{burItems.filter(b=>b.quote?.status==="pending").map(b=><tr key={b.id} style={{borderBottom:"1px solid #fef9c3"}}><td style={{padding:"9px 12px",fontWeight:700,fontFamily:"monospace",color:"#1d4ed8"}}>{b.code||"—"}</td><td style={{padding:"9px 12px"}}>{b.desc}</td><td style={{padding:"9px 12px"}}>{b.quote.supplier}</td><td style={{padding:"9px 12px",color:"#64748b"}}>{b.quote.date}</td><td style={{padding:"9px 12px",textAlign:"right",fontWeight:700,color:"#b45309"}}>S$ {fmt(b.quote.rate)}</td><td style={{padding:"9px 8px",textAlign:"right"}}>{user.role==="Lead QS"&&<div style={{display:"flex",gap:4,justifyContent:"flex-end"}}><button onClick={()=>approveQuote(b.id)} style={{background:"#16a34a",color:"#fff",border:"none",borderRadius:5,padding:"3px 10px",fontSize:11,cursor:"pointer",fontWeight:700}}>✓ Approve</button><button onClick={()=>rejectQuote(b.id)} style={{background:"#ef4444",color:"#fff",border:"none",borderRadius:5,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>✕</button></div>}</td></tr>)}</tbody>
-                </table>
-              </div>
-            )}
           </div>
         )}
 
@@ -822,7 +801,7 @@ export default function App(){
       {/* ══ COST DATA MODAL ══ */}
       {costModal&&modalItem&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:720,maxHeight:"88vh",display:"flex",flexDirection:"column",boxShadow:"0 25px 60px rgba(0,0,0,.3)"}}>
+          <div onPaste={async e=>{ const it=[...(e.clipboardData?.items||[])].find(x=>x.type&&x.type.startsWith("image/")); if(it){const f=it.getAsFile(); if(f){await pickCostImg(f); toast_("📷 Photo pasted — fill details, then Add Entry");}} }} style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:720,maxHeight:"88vh",display:"flex",flexDirection:"column",boxShadow:"0 25px 60px rgba(0,0,0,.3)"}}>
             <div style={{padding:"16px 20px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
               <div>
                 <div style={{fontWeight:700,fontSize:15,color:"#1e293b",display:"flex",alignItems:"center",gap:8}}>
@@ -846,7 +825,7 @@ export default function App(){
               ):(
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:16}}>
                   <thead><tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:11}}>
-                    {["Supplier / Vendor","Rate (S$)","Date","Note",""].map((h,i)=><th key={i} style={{padding:"8px 10px",textAlign:i===1?"right":"left",fontWeight:600,borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}
+                    {["Supplier / Vendor","Rate (S$)","Date","Note","Photo",""].map((h,i)=><th key={i} style={{padding:"8px 10px",textAlign:i===1?"right":"left",fontWeight:600,borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}
                   </tr></thead>
                   <tbody>
                     {costEntries.map(e=>(
@@ -855,6 +834,7 @@ export default function App(){
                         <td style={{padding:"10px 10px",textAlign:"right",color:"#1d4ed8",fontWeight:700,fontSize:14}}>S$ {fmt(e.rate)}</td>
                         <td style={{padding:"10px 10px",color:"#64748b"}}>{e.date||"—"}</td>
                         <td style={{padding:"10px 10px",color:"#94a3b8",fontSize:11}}>{e.note||"—"}</td>
+                        <td style={{padding:"6px 10px"}}>{e.img?<img src={e.img} alt="" onClick={()=>setImgView(e.img)} style={{height:34,maxWidth:60,objectFit:"cover",borderRadius:4,cursor:"zoom-in",border:"1px solid #e2e8f0"}}/>:<span style={{color:"#cbd5e1"}}>—</span>}</td>
                         <td style={{padding:"10px 8px"}}>
                           <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
                             {cType==="subcon"&&<button onClick={()=>useCostEntry(e)} style={{background:"#f59e0b",color:"#fff",border:"none",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:700,whiteSpace:"nowrap"}}>→ Use as Quote</button>}
@@ -874,14 +854,26 @@ export default function App(){
                     <input type={t} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 9px",fontSize:12,outline:"none",boxSizing:"border-box"}} placeholder={ph} value={cForm[k]} onChange={e=>setCForm(f=>({...f,[k]:e.target.value}))}/></div>
                   ))}
                 </div>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+                  <label style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:7,padding:"6px 12px",fontSize:12,cursor:"pointer",color:"#475569",fontWeight:600}}>📷 Attach photo<input type="file" accept="image/*" style={{display:"none"}} onChange={e=>pickCostImg(e.target.files[0])}/></label>
+                  <span style={{fontSize:11,color:"#94a3b8"}}>…or paste a screenshot (Ctrl+V) anywhere in this window</span>
+                  {cForm.img&&<span style={{display:"inline-flex",alignItems:"center",gap:6}}><img src={cForm.img} alt="" style={{height:38,borderRadius:4,border:"1px solid #e2e8f0"}}/><button onClick={()=>setCForm(f=>({...f,img:""}))} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></span>}
+                </div>
                 <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-                  <button onClick={()=>setCForm({supplier:"",rate:"",date:"",note:""})} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"7px 14px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>
+                  <button onClick={()=>setCForm({supplier:"",rate:"",date:"",note:"",img:""})} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"7px 14px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>
                   <button onClick={addCostEntry} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontSize:12,cursor:"pointer",fontWeight:600}}>Add Entry</button>
                 </div>
               </div>
-              {cType==="subcon"&&<div style={{marginTop:10,background:"#fef9c3",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#92400e"}}>💡 Click <b>"→ Use as Quote"</b> to set this supplier rate as the Sub-Con Quotation. It highlights 🟡 until the Lead QS approves it.</div>}
+              {cType==="subcon"&&<div style={{marginTop:10,background:"#eff6ff",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#1d4ed8"}}>💡 Click <b>"→ Use as Quote"</b> to set this supplier's rate as the item's Sub-Con rate.</div>}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ══ IMAGE LIGHTBOX ══ */}
+      {imgView&&(
+        <div onClick={()=>setImgView(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.82)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center",padding:20,cursor:"zoom-out"}}>
+          <img src={imgView} alt="" style={{maxWidth:"95%",maxHeight:"95%",borderRadius:8,boxShadow:"0 10px 40px rgba(0,0,0,.5)"}}/>
         </div>
       )}
     </div>
