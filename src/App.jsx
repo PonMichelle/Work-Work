@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { auth, db } from "./firebase";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
@@ -596,70 +596,42 @@ export default function App(){
                 <div style={{fontSize:13}}>{_q?"Try a different search term":'Click "+ Add Item" or "Load master list"'}</div>
               </div>
             ):(
-              <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                {catItems.map(item=>{
-                  const isExp=expBur===item.id;
-                  const isPending=item.quote?.status==="pending";
-                  const isApproved=item.quote?.status==="approved";
-                  const total=bTot(item);
-                  const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0);
-                  return(
-                    <div key={item.id} style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",cursor:"pointer"}} onClick={()=>setExpBur(isExp?null:item.id)}>
-                        <span style={{fontSize:12,color:isExp?"#2563eb":"#cbd5e1",flexShrink:0}}>{isExp?"▼":"▶"}</span>
-                        <div style={{flex:1,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",minWidth:0}}>
-                          <span style={{fontWeight:800,fontSize:12,background:"#eff6ff",color:"#1d4ed8",padding:"2px 8px",borderRadius:5,flexShrink:0,fontFamily:"monospace"}}>{item.code||"—"}</span>
-                          {item.group&&<span style={{fontSize:10,color:"#94a3b8",flexShrink:0,fontStyle:"italic"}}>{item.group}</span>}
-                          <span style={{fontSize:13,fontWeight:500,color:"#1e293b",flex:1,minWidth:100}}>{item.desc}</span>
-                          <span style={{fontSize:11,color:"#94a3b8",flexShrink:0}}>{item.unit}</span>
-                          <div style={{display:"flex",gap:8,fontSize:11,flexShrink:0,flexWrap:"wrap"}}>
-                            {COMPS.map(k=>+item[k]>0&&k!=="subcon"&&<span key={k} style={{color:"#64748b"}}>{k[0].toUpperCase()}:{fmt(item[k])}</span>)}
-                            {item.subcon>0&&<span style={{color:"#7c3aed"}}>SC:{fmt(item.subcon)}</span>}
+              <div style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead><tr style={{background:"#fef9c3",color:"#92400e",fontSize:11}}>
+                    {["","Description","Unit","BUR Code","Labour","Material","Plant","Rate (S$)","Cost Data",""].map((h,i)=><th key={i} style={{padding:"8px 8px",textAlign:(i>=4&&i<=7)?"right":"left",fontWeight:700,borderBottom:"1px solid #fde68a",whiteSpace:"nowrap"}}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {catItems.map(item=>{
+                      const isExp=expBur===item.id; const total=bTot(item); const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0); const cdCount=(item.costData||[]).length;
+                      const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2};
+                      const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
+                      return(<Fragment key={item.id}>
+                        <tr style={{borderBottom:"1px solid #f8fafc"}}>
+                          <td style={{padding:"2px 4px",textAlign:"center",cursor:"pointer",color:isExp?"#2563eb":"#cbd5e1"}} onClick={()=>setExpBur(isExp?null:item.id)}>{isExp?"▼":"▶"}</td>
+                          <td style={{padding:"3px 6px"}}><input style={{width:"100%",minWidth:240,border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></td>
+                          <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
+                          <td style={{padding:"3px 6px"}}><input style={{width:130,border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})}/></td>
+                          <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:66,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.labour??""} onChange={e=>updBur(item.id,{labour:+e.target.value||0})}/></td>
+                          <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:66,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.material??""} onChange={e=>updBur(item.id,{material:+e.target.value||0})}/></td>
+                          <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:66,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.plant??""} onChange={e=>updBur(item.id,{plant:+e.target.value||0})}/></td>
+                          <td style={{padding:"3px 8px",textAlign:"right",fontWeight:700,color:"#1d4ed8",whiteSpace:"nowrap"}}>{fmt(total)}</td>
+                          <td style={{padding:"3px 6px",textAlign:"center"}}><button onClick={()=>{setCostModal(item.id);setCType("subcon");}} style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#92400e",fontWeight:600,whiteSpace:"nowrap"}}>📊{cdCount?` ${cdCount}`:""}</button></td>
+                          <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>delBur(item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></td>
+                        </tr>
+                        {isExp&&(<tr><td colSpan={10} style={{background:"#fafafa",padding:"12px 16px",borderBottom:"1px solid #eef2f7"}}>
+                          <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
+                            <div><label style={lbl}>SUBCON (S$)</label><input type="number" style={{...inp,width:90}} value={item.subcon??""} onChange={e=>updBur(item.id,{subcon:+e.target.value||0})}/></div>
+                            <div><label style={lbl}>OH %</label><input type="number" style={{...inp,width:70}} value={item.oh??15} onChange={e=>updBur(item.id,{oh:+e.target.value||0})}/></div>
+                            <div><label style={lbl}>PROFIT %</label><input type="number" style={{...inp,width:70}} value={item.profit??10} onChange={e=>updBur(item.id,{profit:+e.target.value||0})}/></div>
+                            <div><label style={lbl}>CATEGORY</label><select style={{...inp,background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                            <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b> · OH({item.oh}%) <b>S$ {fmt(direct*(+item.oh||0)/100)}</b> · <span style={{color:"#1d4ed8",fontWeight:800}}>Total S$ {fmt(total)}/{item.unit}</span></div>
                           </div>
-                          <span style={{fontWeight:700,fontSize:13,color:"#1d4ed8",flexShrink:0}}>S$ {fmt(total)}/{item.unit}</span>
-                        </div>
-                        <div style={{display:"flex",gap:6,flexShrink:0}} onClick={e=>e.stopPropagation()}>
-                          <button onClick={()=>{setCostModal(item.id);setCType("subcon");}} style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#92400e",fontWeight:600,whiteSpace:"nowrap"}}>📊 Cost Data</button>
-                          <button onClick={()=>delBur(item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700,padding:"2px 4px"}}>✕</button>
-                        </div>
-                      </div>
-
-                      {isExp&&(
-                        <div style={{borderTop:"1px solid #f1f5f9",padding:"16px",background:"#fafafa"}}>
-                          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(190px,1fr))",gap:10,marginBottom:12}}>
-                            <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>BUR CODE</label><input style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})}/></div>
-                            <div style={{gridColumn:"span 2"}}><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>DESCRIPTION</label><input style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></div>
-                            <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>UNIT</label><select style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",background:"#fff"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></div>
-                            <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>CATEGORY</label><select style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-                          </div>
-                          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:10,marginBottom:12}}>
-                            {COMPS.map(k=>{
-                              const hasCostData=(item.costData||[]).filter(e=>e.component===k).length;
-                              return(
-                                <div key={k}>
-                                  <label style={{fontSize:11,color:"#94a3b8",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3,fontWeight:600}}>
-                                    {CLABEL[k].toUpperCase()}
-                                    <button onClick={e=>{e.stopPropagation();setCostModal(item.id);setCType(k);}} style={{fontSize:9,background:hasCostData?"#fef9c3":"#f1f5f9",border:"none",borderRadius:3,padding:"1px 5px",cursor:"pointer",color:hasCostData?"#92400e":"#64748b",fontWeight:600}}>📊{hasCostData?` ${hasCostData}`:""}</button>
-                                  </label>
-                                  <input type="number" style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none",background:"#fff"}} value={item[k]??""} onChange={e=>updBur(item.id,{[k]:+e.target.value||0})}/>
-                                </div>
-                              );
-                            })}
-                            <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>OH%</label><input type="number" style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none"}} value={item.oh??15} onChange={e=>updBur(item.id,{oh:+e.target.value||0})}/></div>
-                            <div><label style={{fontSize:11,color:"#94a3b8",display:"block",marginBottom:3,fontWeight:600}}>PROFIT%</label><input type="number" style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 10px",fontSize:13,outline:"none"}} value={item.profit??10} onChange={e=>updBur(item.id,{profit:+e.target.value||0})}/></div>
-                          </div>
-                          <div style={{background:"#eff6ff",borderRadius:8,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                            <div style={{fontSize:12,color:"#475569",display:"flex",gap:16,flexWrap:"wrap"}}>
-                              <span>Direct: <b>S$ {fmt(direct)}</b></span>
-                              <span>OH ({item.oh}%): <b>S$ {fmt(direct*(+item.oh||0)/100)}</b></span>
-                            </div>
-                            <span style={{fontSize:15,fontWeight:800,color:"#1d4ed8"}}>Total Rate: S$ {fmt(total)} / {item.unit}</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                        </td></tr>)}
+                      </Fragment>);
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
