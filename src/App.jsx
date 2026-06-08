@@ -277,7 +277,9 @@ export default function App(){
       const orphan=burItems.filter(b=>!known.has(b.catId)).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(orphan.length)groups.push({name:"(Uncategorised)",items:orphan});
       ws.mergeCells(1,1,1,headers.length); const t=ws.getCell(1,1); t.value="BUILD UP RATES"; t.font={bold:true,size:14,color:{argb:"FF1E3A5F"}};
       const hr=ws.getRow(2); headers.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font={bold:true}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}}; c.border=bd; c.alignment={horizontal:(i>=3&&i<=7)?"right":"left",vertical:"middle",wrapText:true}; }); hr.height=22;
-      let r=3, count=0;
+      { const pc=ws.getCell(2,headers.length+1); pc.value="Photos"; pc.font={bold:true}; pc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}}; pc.border=bd; }
+      for(let c=headers.length+1;c<=headers.length+12;c++)ws.getColumn(c).width=18;
+      let r=3, count=0, photoCount=0;
       for(const g of groups){
         ws.mergeCells(r,1,r,headers.length); const cc=ws.getCell(r,1); cc.value=g.name+"  ("+g.items.length+")"; cc.font={bold:true,color:{argb:"FF92400E"}}; cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF9C4"}}; cc.border=bd; r++;
         for(const it of g.items){
@@ -286,25 +288,16 @@ export default function App(){
           const vals=[it.desc||"",it.unit||"",it.code||"",+it.labour||0,+it.material||0,+it.plant||0,+it.subcon||0,total,q];
           const row=ws.getRow(r);
           vals.forEach((v,i)=>{ const c=row.getCell(i+1); c.value=(moneyCols.has(i+1)&&!(+v>0))?null:v; c.border=bd; c.alignment={vertical:"top",horizontal:(i>=3&&i<=7)?"right":"left",wrapText:(i===0||i===8)}; if(moneyCols.has(i+1))c.numFmt="#,##0.00"; if(i===2)c.font={name:"Consolas",color:{argb:"FF1D4ED8"}}; if(i===7)c.font={bold:true,color:{argb:"FF1D4ED8"}}; });
+          // embed this item's photos in the columns after the table, on the same row
+          const itemPhotos=(it.costData||[]).flatMap(e=>e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[])).slice(0,12);
+          if(itemPhotos.length){ row.height=98; for(let i=0;i<itemPhotos.length;i++){ try{ const small=await shrinkDataURL(itemPhotos[i]); const m=/^data:image\/(\w+);base64,(.+)$/.exec(small); if(m){ const id=wb.addImage({base64:m[2],extension:"jpeg"}); ws.addImage(id,{tl:{col:headers.length+i,row:r-1},ext:{width:124,height:92}}); photoCount++; } }catch{} } }
           r++; count++;
         }
       }
       ws.views=[{state:"frozen",ySplit:2}];
-      // Photos sheet — embed every cost-data photo with its item/supplier
-      const photos=[];
-      for(const b of burItems){ for(const e of (b.costData||[])){ const ph=e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[]); for(const p of ph)photos.push({code:b.code,desc:b.desc,supplier:e.supplier,rate:e.rate,data:p}); } }
-      if(photos.length){
-        const ps=wb.addWorksheet("Photos"); ps.columns=[{width:22},{width:42},{width:24},{width:12},{width:32}];
-        const ph=ps.getRow(1); ["Code","Description","Supplier","Rate (S$)","Photo"].forEach((h,i)=>{const c=ph.getCell(i+1);c.value=h;c.font={bold:true};c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}};c.border=bd;}); ph.height=20;
-        let rr=2;
-        for(const p of photos){ const row=ps.getRow(rr); row.getCell(1).value=p.code||""; row.getCell(2).value=p.desc||""; row.getCell(3).value=p.supplier||""; row.getCell(4).value=+p.rate||null; row.getCell(4).numFmt="#,##0.00"; [1,2,3,4,5].forEach(ci=>row.getCell(ci).border=bd); row.height=96;
-          try{ const small=await shrinkDataURL(p.data); const m=/^data:image\/(\w+);base64,(.+)$/.exec(small); if(m){ const id=wb.addImage({base64:m[2],extension:"jpeg"}); ps.addImage(id,{tl:{col:4,row:rr-1},ext:{width:124,height:92}}); } }catch{}
-          rr++;
-        }
-      }
       const out=await wb.xlsx.writeBuffer(); const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
       const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR_BuildUpRates.xlsx"; a.click(); URL.revokeObjectURL(url);
-      toast_(`✅ Exported ${count} items${photos.length?` + ${photos.length} photos`:""}`);
+      toast_(`✅ Exported ${count} items${photoCount?` + ${photoCount} photos`:""}`);
     }catch(e){ toast_("⚠️ Export failed: "+(e&&e.message||e)); }
   },[burItems,cats,toast_]);
 
