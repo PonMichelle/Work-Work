@@ -168,7 +168,9 @@ export default function SheetGrid({ db, pid, toast, baseUrl, burLookup }){
                   </td>
                   {row.cells.map((cell,ci)=>{ const c=ci+1; if(covered.has(`${r}_${c}`))return null; const sp=spanMap[`${r}_${c}`]; const key=ck(edits.active,r,c); const raw=edits.cells?.[key]??cell.v; const disp=(typeof raw==="string"&&raw.trim().startsWith("="))?fmtNum(evalFormula(raw.trim(),getVal,0)):raw;
                     return(
-                      <td key={c} colSpan={sp?sp.cs:1} rowSpan={sp?sp.rs:1} contentEditable suppressContentEditableWarning onBlur={e=>commitCell(r,c,e.currentTarget.innerText)}
+                      <td key={c} colSpan={sp?sp.cs:1} rowSpan={sp?sp.rs:1} contentEditable suppressContentEditableWarning data-rc={`${r}_${c}`}
+                        onKeyDown={e=>{ if(e.key==="Enter"){e.preventDefault();e.currentTarget.blur();const t=document.querySelector(`[data-rc="${r+1}_${c}"]`);if(t){t.focus();const sel=window.getSelection();sel.selectAllChildren(t);sel.collapseToEnd();}} else if(e.key==="Tab"){e.preventDefault();e.currentTarget.blur();const t=document.querySelector(`[data-rc="${r}_${c+(e.shiftKey?-1:1)}"]`);if(t)t.focus();} else if(e.key==="Escape"){e.currentTarget.blur();} }}
+                        onBlur={e=>commitCell(r,c,e.currentTarget.innerText)}
                         style={{border:"1px solid #eef2f7",borderLeft:cell.bL?"1px solid #94a3b8":undefined,borderTop:cell.bT?"1px solid #94a3b8":undefined,borderRight:cell.bR?"1px solid #94a3b8":undefined,borderBottom:cell.bB?"1px solid #94a3b8":undefined,
                           background:cell.bg||"transparent",color:cell.color||"#1e293b",fontWeight:cell.bold?700:400,fontStyle:cell.italic?"italic":"normal",fontSize:Math.max(9,Math.min(16,cell.size)),
                           textAlign:cell.align||"left",verticalAlign:cell.valign==="middle"||cell.valign==="center"?"middle":cell.valign==="top"?"top":"bottom",whiteSpace:cell.wrap?"normal":"nowrap",overflow:"hidden",padding:"1px 4px",outline:"none"}}>
