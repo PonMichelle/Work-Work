@@ -274,7 +274,8 @@ export default function App(){
       const moneyCols=new Set([4,5,6,7,8]);
       // group by category
       const groups=[]; const known=new Set();
-      for(const cat of cats){ known.add(cat.id); const items=burItems.filter(b=>b.catId===cat.id).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(items.length)groups.push({name:cat.name,items}); }
+      const orderedCats=catSort==="none"?cats:[...cats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
+      for(const cat of orderedCats){ known.add(cat.id); const items=burItems.filter(b=>b.catId===cat.id).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(items.length)groups.push({name:cat.name,items}); }
       const orphan=burItems.filter(b=>!known.has(b.catId)).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(orphan.length)groups.push({name:"(Uncategorised)",items:orphan});
       ws.mergeCells(1,1,1,headers.length); const t=ws.getCell(1,1); t.value="BUILD UP RATES"; t.font={bold:true,size:14,color:{argb:"FF1E3A5F"}};
       const hr=ws.getRow(2); headers.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font={bold:true}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}}; c.border=bd; c.alignment={horizontal:(i>=3&&i<=7)?"right":"left",vertical:"middle",wrapText:true}; }); hr.height=22;
@@ -302,7 +303,7 @@ export default function App(){
       const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR_BuildUpRates.xlsx"; a.click(); URL.revokeObjectURL(url);
       toast_(`✅ Exported ${count} items${photoCount?` + ${photoCount} photos`:""}`);
     }catch(e){ toast_("⚠️ Export failed: "+(e&&e.message||e)); }
-  },[burItems,cats,toast_]);
+  },[burItems,cats,toast_,catSort]);
 
   // ── BUR writes (per-document in shared library) ─────────────────────────────
   const addBurItem=useCallback(async catId=>{ const ref=doc(collection(db,"bur")); try{ await setDoc(ref,{pid,catId,code:"",desc:"New Item",unit:"sum",labour:0,material:0,plant:0,subcon:0,oh:15,profit:10,costData:[],quote:null,group:""}); setExpBur(ref.id);}catch(e){toast_("⚠️ "+e.message);} },[pid]);
