@@ -214,8 +214,8 @@ export default function App(){
           const code=toStr(row.getCell(cCode).value).trim(); if(!code)continue;
           scanned++;
           const bur=codeMap[code.toLowerCase()]; if(!bur){unmatched.add(code);continue;}
-          if(cMat&&cLab){ const mc=row.getCell(cMat); if(!mc.formula)mc.value=+bur.material||0; const lc=row.getCell(cLab); if(!lc.formula)lc.value=+bur.labour||0; filled++; }
-          else if(cRate){ const rc=row.getCell(cRate); if(!rc.formula){rc.value=+bTot(bur)||0; filled++;} }
+          if(cMat&&cLab){ const m=+bur.material||0,l=+bur.labour||0; const mc=row.getCell(cMat); if(!mc.formula)mc.value=m>0?m:null; const lc=row.getCell(cLab); if(!lc.formula)lc.value=l>0?l:null; filled++; }
+          else if(cRate){ const rc=row.getCell(cRate); if(!rc.formula){const t=+bTot(bur)||0; rc.value=t>0?t:null; filled++;} }
         }
       });
       const out=await wb.xlsx.writeBuffer();
@@ -248,7 +248,7 @@ export default function App(){
         let hr=0,cCode=0,cRate=0;
         for(let r=1;r<=Math.min(12,ws.rowCount);r++){ let f=false; ws.getRow(r).eachCell({includeEmpty:false},(cell,col)=>{ const t=toStr(cell.value).trim().toUpperCase(); if(t==="CODE"){cCode=col;f=true;} if(t==="RATE"){cRate=col;} }); if(f){hr=r;break;} }
         if(!hr||!cCode||!cRate)return;
-        for(let r=hr+1;r<=ws.rowCount;r++){ const row=ws.getRow(r); const code=toStr(row.getCell(cCode).value).trim(); if(!code)continue; const bur=codeMap[code.toLowerCase()]; if(!bur)continue; const rc=row.getCell(cRate); if(!rc.formula){ rc.value=+bTot(bur)||0; filled++; } }
+        for(let r=hr+1;r<=ws.rowCount;r++){ const row=ws.getRow(r); const code=toStr(row.getCell(cCode).value).trim(); if(!code)continue; const bur=codeMap[code.toLowerCase()]; if(!bur)continue; const rc=row.getCell(cRate); if(!rc.formula){ const rate=+bTot(bur)||0; rc.value=rate>0?rate:null; if(rate>0)filled++; } }
       });
       const out=await wb.xlsx.writeBuffer(); const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
       const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR_priced.xlsx"; a.click(); URL.revokeObjectURL(url);
