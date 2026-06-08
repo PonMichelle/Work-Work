@@ -181,7 +181,7 @@ export default function App(){
     let sections=newSections(), cols=[];
     const cur=projects&&projects.find(p=>p.id===pid);
     if(data&&cur&&confirm(`Copy the BOQ from "${cur.name}" into the new project?\n\nOK = duplicate its BOQ rows & columns\nCancel = start with a blank BOQ`)){ sections=JSON.parse(JSON.stringify(data.sections||newSections())); cols=JSON.parse(JSON.stringify(data.cols||[])); }
-    const copyBur = cur && burItems.length>0 && confirm(`Copy the BUR rate library (${burItems.length} items) from "${cur.name}" into the new project?\n\nOK = copy all rates as a starting point\nCancel = start with an EMPTY BUR (then use "Load master list" or "Paste from Excel" to bring in your own)`);
+    const copyBur = cur && burItems.length>0 && confirm(`Copy the BUR rate library (${burItems.length} items) from "${cur.name}" into the new project?\n\nOK = copy all rates as a starting point\nCancel = start with an EMPTY BUR (then use "Paste from Excel" to bring in your own)`);
     const ref=doc(collection(db,"projects"));
     try{
       await setDoc(ref,{name:name.trim(),createdAt:Date.now(),sections,cols,ts:Date.now()});
@@ -480,7 +480,7 @@ export default function App(){
   const burCw=k=>burColW[k]??({desc:360,unit:60,code:150,labour:90,material:95,plant:80,rate:100,cd:90}[k]||80);
   const startBurDrag=(k,e)=>{ e.preventDefault();e.stopPropagation(); burDragRef.current={k,start:e.clientX,startW:burCw(k)}; };
   const burHead=[["desc","Description","left"],["unit","Unit","left"],["code","BUR Code","left"],["labour","Labour","right"],["material","Material","right"],["plant","Plant","right"],["rate","Rate (S$)","right"],["cd","Cost Data","center"]];
-  const burEmpty=(<div style={{background:"#fff",borderRadius:12,padding:40,textAlign:"center",color:"#94a3b8"}}><div style={{fontSize:36,marginBottom:8}}>📊</div><div style={{fontWeight:600,fontSize:14,marginBottom:4}}>No items{_q?" match your search":" here"}</div><div style={{fontSize:13}}>{_q?"Try a different search term":'Click "+ Add Item" or "Load master list"'}</div></div>);
+  const burEmpty=(<div style={{background:"#fff",borderRadius:12,padding:40,textAlign:"center",color:"#94a3b8"}}><div style={{fontSize:36,marginBottom:8}}>📊</div><div style={{fontWeight:600,fontSize:14,marginBottom:4}}>No items{_q?" match your search":" here"}</div><div style={{fontSize:13}}>{_q?"Try a different search term":'Click "+ Add Item" or "Paste from Excel"'}</div></div>);
   const burTableEl=items=>(
     <div style={{background:"#fff",borderRadius:8,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"auto"}}>
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,tableLayout:"fixed"}}>
