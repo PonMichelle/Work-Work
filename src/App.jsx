@@ -113,6 +113,7 @@ export default function App(){
 
   const sTimer=useRef(null); const uRef=useRef(null); const pidRef=useRef(null); const dirtyRef=useRef(false); const pendingRef=useRef(null); const logRef=useRef([]); const burTimers=useRef({});
   const burDragRef=useRef(null); const burColWRef=useRef(burColW); useEffect(()=>{burColWRef.current=burColW;},[burColW]);
+  const burItemsRef=useRef([]); useEffect(()=>{burItemsRef.current=burItems;});
   useEffect(()=>{ const mm=e=>{ const d=burDragRef.current; if(!d)return; const w=Math.max(40,d.startW+(e.clientX-d.start)); setBurColW(p=>({...p,[d.k]:w})); }; const mu=()=>{ if(burDragRef.current){ try{localStorage.setItem("burColW",JSON.stringify(burColWRef.current));}catch{} burDragRef.current=null; } }; window.addEventListener("mousemove",mm); window.addEventListener("mouseup",mu); return ()=>{window.removeEventListener("mousemove",mm);window.removeEventListener("mouseup",mu);}; },[]);
   const user=authUser&&profile?{uid:authUser.uid,email:authUser.email,name:profile.name,role:profile.role}:null;
   useEffect(()=>{uRef.current=user;});
@@ -359,6 +360,8 @@ export default function App(){
   const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!cForm.rate){toast_("⚠️ Enter supplier and rate");return;} const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:+cForm.rate,date:cForm.date,note:cForm.note,imgs:cForm.imgs||[]}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",note:"",imgs:[]}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
   const pickCostImg=useCallback(async files=>{ const list=files&&files.length!=null?[...files]:(files?[files]:[]); if(!list.length)return; const out=[]; for(const file of list){ const d=await imgToDataURL(file); if(d&&d.length<=1400000)out.push(d); else if(d)toast_("⚠️ One image too large, skipped"); } if(out.length)setCForm(f=>({...f,imgs:[...(f.imgs||[]),...out]})); },[toast_]);
   const delCostEntry=useCallback(eid=>{ const b=burItems.find(x=>x.id===costModal); if(!b)return; setBurField(costModal,{costData:(b.costData||[]).filter(e=>e.id!==eid)}); },[costModal,burItems]);
+  // Edit an existing cost-data entry (optimistic local + debounced save)
+  const updCostEntry=useCallback((eid,ch)=>{ setBurItems(prev=>prev.map(b=>b.id===costModal?{...b,costData:(b.costData||[]).map(e=>e.id===eid?{...e,...ch}:e)}:b)); const k="cd_"+costModal; if(burTimers.current[k])clearTimeout(burTimers.current[k]); burTimers.current[k]=setTimeout(()=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(b)updateDoc(doc(db,"bur",costModal),{costData:b.costData}).catch(()=>{}); },600); },[costModal]);
   const useCostEntry=useCallback(entry=>{ setBurField(costModal,{subcon:entry.rate,quote:null}); toast_(`✅ Sub-con rate set: S$ ${fmt(entry.rate)} (${entry.supplier})`); },[costModal]);
   const approveQuote=useCallback(id=>{ if(!uRef.current)return; const b=burItems.find(x=>x.id===id); if(!b||!b.quote)return; setBurField(id,{quote:{...b.quote,status:"approved",approvedBy:uRef.current.name,approvedAt:new Date().toLocaleString("en-SG")}}); toast_(`✅ Approved by ${uRef.current.name}`); },[burItems]);
   const rejectQuote=useCallback(id=>{ setBurField(id,{subcon:0,quote:null}); toast_("🔴 Quote rejected and cleared"); },[]);
@@ -864,10 +867,10 @@ export default function App(){
                   <tbody>
                     {costEntries.map(e=>(
                       <tr key={e.id} style={{borderBottom:"1px solid #f8fafc"}}>
-                        <td style={{padding:"10px 10px",fontWeight:600,color:"#1e293b"}}>{e.supplier}</td>
-                        <td style={{padding:"10px 10px",textAlign:"right",color:"#1d4ed8",fontWeight:700,fontSize:14}}>S$ {fmt(e.rate)}</td>
-                        <td style={{padding:"10px 10px",color:"#64748b"}}>{e.date||"—"}</td>
-                        <td style={{padding:"10px 10px",color:"#94a3b8",fontSize:11}}>{e.note||"—"}</td>
+                        <td style={{padding:"6px 8px"}}><input value={e.supplier||""} onChange={ev=>updCostEntry(e.id,{supplier:ev.target.value})} style={{width:"100%",border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:12,fontWeight:600,color:"#1e293b",outline:"none",background:"#f8fafc"}}/></td>
+                        <td style={{padding:"6px 8px",textAlign:"right"}}><input type="number" value={e.rate??""} onChange={ev=>updCostEntry(e.id,{rate:+ev.target.value||0})} style={{width:90,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:13,fontWeight:700,color:"#1d4ed8",outline:"none",textAlign:"right",background:"#f8fafc"}}/></td>
+                        <td style={{padding:"6px 8px"}}><input value={e.date||""} placeholder="—" onChange={ev=>updCostEntry(e.id,{date:ev.target.value})} style={{width:80,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:12,color:"#64748b",outline:"none",background:"#f8fafc"}}/></td>
+                        <td style={{padding:"6px 8px"}}><input value={e.note||""} placeholder="—" onChange={ev=>updCostEntry(e.id,{note:ev.target.value})} style={{width:"100%",minWidth:90,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:11,color:"#64748b",outline:"none",background:"#f8fafc"}}/></td>
                         <td style={{padding:"6px 10px"}}>{(()=>{const ph=e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[]); return ph.length?<div style={{display:"flex",gap:3,flexWrap:"wrap",maxWidth:120}}>{ph.map((p,i)=><img key={i} src={p} alt="" onClick={()=>setImgView(p)} style={{height:30,width:40,objectFit:"cover",borderRadius:3,cursor:"zoom-in",border:"1px solid #e2e8f0"}}/>)}</div>:<span style={{color:"#cbd5e1"}}>—</span>;})()}</td>
                         <td style={{padding:"10px 8px"}}>
                           <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
