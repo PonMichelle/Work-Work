@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, Fragment } from "react";
+﻿import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { auth, db } from "./firebase";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
@@ -104,6 +104,7 @@ export default function App(){
   const [cForm,setCForm]=useState({supplier:"",rate:"",date:"",location:"",note:"",imgs:[]});
   const [imgView,setImgView]=useState(null);
   const [ceSort,setCeSort]=useState({by:"none",dir:1}); const [showGraph,setShowGraph]=useState(false);
+  const [ccomps,setCcomps]=useState([]);
   const [newCat,setNewCat]=useState(""); const [showNewCat,setShowNewCat]=useState(false);
   const [codes,setCodes]=useState(DEF_CODES);
   const [editCId,setEditCId]=useState(null); const [codeForm,setCodeForm]=useState({code:"",desc:"",cat:""}); const [showAddC,setShowAddC]=useState(false);
@@ -167,6 +168,9 @@ export default function App(){
   // Per-project master BQ template override (uploaded). Falls back to the bundled CAG template.
   useEffect(()=>{ if(!ready||!pid){setBqTplB64(null);setBqTplName("");return;} return onSnapshot(doc(db,"boqtemplate",pid),s=>{ if(s.exists()){setBqTplB64(s.data().b64||null);setBqTplName(s.data().name||"");}else{setBqTplB64(null);setBqTplName("");} }); },[ready,pid]);
   useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","log"),s=>{ const e=s.exists()?(s.data().entries||[]):[]; logRef.current=e; setLog(e); }); },[ready]);
+  useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","ccomps"),s=>setCcomps(s.exists()?(s.data().list||[]):[])); },[ready]);
+  const addComponentTab=async()=>{ const name=prompt("New cost-data tab name (e.g. Equipment, Transport, Specialist):"); if(!name||!name.trim())return; const key="cc_"+Math.random().toString(36).slice(2,8); try{await setDoc(doc(db,"meta","ccomps"),{list:[...ccomps,{key,label:name.trim()}]});setCType(key);}catch(e){toast_("⚠️ "+e.message);} };
+  const delComponentTab=async key=>{ if(!confirm("Remove this tab? Existing entries stay in the data but the tab is hidden."))return; try{await setDoc(doc(db,"meta","ccomps"),{list:ccomps.filter(c=>c.key!==key)});}catch{} if(cType===key)setCType("subcon"); };
 
   // Current project's BOQ
   useEffect(()=>{ if(!ready||!pid){setData(null);return;} return onSnapshot(doc(db,"projects",pid),s=>{ if(!s.exists())return; if(dirtyRef.current)return; const d=s.data(); setData({sections:d.sections||newSections(),cols:d.cols||[],ts:d.ts||0}); }); },[ready,pid]);
@@ -363,6 +367,8 @@ export default function App(){
   const modalItem=costModal?burItems.find(b=>b.id===costModal):null;
   const costEntries=(()=>{ let arr=modalItem?(modalItem.costData||[]).filter(e=>e.component===cType):[]; if(ceSort.by!=="none"){ arr=[...arr].sort((a,b)=>{ if(ceSort.by==="rate")return ((+a.rate||0)-(+b.rate||0))*ceSort.dir; return String(a[ceSort.by]||"").localeCompare(String(b[ceSort.by]||""),undefined,{numeric:true})*ceSort.dir; }); } return arr; })();
   const ceToggleSort=by=>setCeSort(s=>s.by===by?{by,dir:-s.dir}:{by,dir:1});
+  const compLabel=c=>CLABEL[c]||(ccomps.find(x=>x.key===c)||{}).label||c;
+  const allComps=[...COMPS,...ccomps.map(c=>c.key)];
 
   const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!cForm.rate){toast_("⚠️ Enter supplier and rate");return;} const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:+cForm.rate,date:cForm.date,location:cForm.location||"",note:cForm.note,imgs:cForm.imgs||[]}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",location:"",note:"",imgs:[]}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
   const pickCostImg=useCallback(async files=>{ const list=files&&files.length!=null?[...files]:(files?[files]:[]); if(!list.length)return; const out=[]; for(const file of list){ const d=await imgToDataURL(file); if(d&&d.length<=1400000)out.push(d); else if(d)toast_("⚠️ One image too large, skipped"); } if(out.length)setCForm(f=>({...f,imgs:[...(f.imgs||[]),...out]})); },[toast_]);
@@ -868,7 +874,7 @@ export default function App(){
       {/* ══ COST DATA MODAL ══ */}
       {costModal&&modalItem&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div onPaste={async e=>{ const it=[...(e.clipboardData?.items||[])].find(x=>x.type&&x.type.startsWith("image/")); if(it){const f=it.getAsFile(); if(f){await pickCostImg(f); toast_("📷 Photo pasted — fill details, then Add Entry");}} }} style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:720,maxHeight:"88vh",display:"flex",flexDirection:"column",boxShadow:"0 25px 60px rgba(0,0,0,.3)"}}>
+          <div onPaste={async e=>{ const it=[...(e.clipboardData?.items||[])].find(x=>x.type&&x.type.startsWith("image/")); if(it){const f=it.getAsFile(); if(f){await pickCostImg(f); toast_("📷 Photo pasted — fill details, then Add Entry");}} }} style={{background:"#fff",borderRadius:16,width:"96%",maxWidth:1080,maxHeight:"92vh",display:"flex",flexDirection:"column",boxShadow:"0 25px 60px rgba(0,0,0,.3)"}}>
             <div style={{padding:"16px 20px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
               <div>
                 <div style={{fontWeight:700,fontSize:15,color:"#1e293b",display:"flex",alignItems:"center",gap:8}}>
@@ -879,12 +885,16 @@ export default function App(){
               </div>
               <button onClick={()=>setCostModal(null)} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,cursor:"pointer",color:"#64748b",fontWeight:600,flexShrink:0}}>Close ✕</button>
             </div>
-            <div style={{display:"flex",borderBottom:"1px solid #e2e8f0",padding:"0 20px",flexShrink:0}}>
-              {COMPS.map(c=>{const cnt=(modalItem.costData||[]).filter(e=>e.component===c).length;return(
-                <button key={c} onClick={()=>setCType(c)} style={{padding:"9px 14px",fontSize:12,fontWeight:600,border:"none",borderBottom:cType===c?"2.5px solid #2563eb":"2.5px solid transparent",color:cType===c?"#2563eb":"#64748b",background:"none",cursor:"pointer",whiteSpace:"nowrap"}}>
-                  {CLABEL[c]}{cnt>0&&<span style={{marginLeft:4,background:cType===c?"#dbeafe":"#f1f5f9",color:cType===c?"#1d4ed8":"#64748b",borderRadius:10,padding:"0 5px",fontSize:10}}>{cnt}</span>}
-                </button>
+            <div style={{display:"flex",borderBottom:"1px solid #e2e8f0",padding:"0 20px",flexShrink:0,overflowX:"auto"}}>
+              {allComps.map(c=>{const cnt=(modalItem.costData||[]).filter(e=>e.component===c).length; const custom=!COMPS.includes(c); return(
+                <span key={c} style={{display:"inline-flex",alignItems:"center",borderBottom:cType===c?"2.5px solid #2563eb":"2.5px solid transparent"}}>
+                  <button onClick={()=>setCType(c)} style={{padding:"9px 10px 9px 14px",fontSize:12,fontWeight:600,border:"none",color:cType===c?"#2563eb":"#64748b",background:"none",cursor:"pointer",whiteSpace:"nowrap"}}>
+                    {compLabel(c)}{cnt>0&&<span style={{marginLeft:4,background:cType===c?"#dbeafe":"#f1f5f9",color:cType===c?"#1d4ed8":"#64748b",borderRadius:10,padding:"0 5px",fontSize:10}}>{cnt}</span>}
+                  </button>
+                  {custom&&<button onClick={()=>delComponentTab(c)} title="Remove tab" style={{border:"none",background:"none",color:"#cbd5e1",cursor:"pointer",fontSize:11,padding:"0 8px 0 0"}}>✕</button>}
+                </span>
               );})}
+              <button onClick={addComponentTab} title="Add a tab" style={{padding:"9px 12px",fontSize:12,fontWeight:700,border:"none",color:"#7c3aed",background:"none",cursor:"pointer",whiteSpace:"nowrap"}}>＋ Tab</button>
             </div>
             <div style={{flex:1,overflow:"auto",padding:"16px 20px"}}>
               {costEntries.length>0&&<div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8,fontSize:11,color:"#64748b",flexWrap:"wrap"}}>
@@ -894,7 +904,7 @@ export default function App(){
               </div>}
               {showGraph&&costEntries.length>0&&(()=>{ const data=[...costEntries].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))); const max=Math.max(...data.map(e=>+e.rate||0),1); const H=180,pad=34,step=Math.max(56,Math.min(90,520/data.length)),W=Math.max(300,data.length*step+30),bw=Math.min(46,step-14);
                 return <div style={{overflowX:"auto",marginBottom:14,border:"1px solid #e2e8f0",borderRadius:8,padding:10,background:"#fff"}}>
-                  <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:4}}>{CLABEL[cType]} rate trend (by date)</div>
+                  <div style={{fontSize:11,fontWeight:700,color:"#475569",marginBottom:4}}>{compLabel(cType)} rate trend (by date)</div>
                   <svg width={W} height={H}>
                     <line x1={18} y1={H-pad} x2={W-6} y2={H-pad} stroke="#e2e8f0"/>
                     {data.map((e,i)=>{ const x=24+i*step; const bh=(H-pad-22)*((+e.rate||0)/max); const y=H-pad-bh; return <g key={i}>
@@ -907,7 +917,7 @@ export default function App(){
                 </div>;
               })()}
               {costEntries.length===0?(
-                <div style={{textAlign:"center",padding:"28px 0",color:"#94a3b8",fontSize:13}}>No {CLABEL[cType]} entries yet — add one below</div>
+                <div style={{textAlign:"center",padding:"28px 0",color:"#94a3b8",fontSize:13}}>No {compLabel(cType)} entries yet — add one below</div>
               ):(
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:16}}>
                   <thead><tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:11}}>
@@ -937,7 +947,7 @@ export default function App(){
                 </table>
               )}
               <div style={{background:"#f8fafc",borderRadius:10,padding:14,border:"1px solid #e2e8f0"}}>
-                <div style={{fontSize:12,fontWeight:600,color:"#475569",marginBottom:10}}>+ Add {CLABEL[cType]} Quote / Price</div>
+                <div style={{fontSize:12,fontWeight:600,color:"#475569",marginBottom:10}}>+ Add {compLabel(cType)} Quote / Price</div>
                 <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1.4fr 2fr",gap:8,marginBottom:10}}>
                   {[["supplier","Supplier / Vendor","text","e.g. ABC Contractors Pte Ltd"],["rate","Rate (S$)","number","0.00"],["date","Date","text","e.g. Jun 2025"],["location","Location","text","e.g. Level 3 / Block A"],["note","Note","text","e.g. FOB, ex-GST"]].map(([k,l,t,ph])=>(
                     <div key={k}><div style={{fontSize:10,color:"#94a3b8",marginBottom:3,fontWeight:600}}>{l}</div>
