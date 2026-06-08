@@ -164,6 +164,42 @@ export default function App(){
   const delCol=useCallback(cid=>{ if(!data||!confirm("Delete this column?"))return; const nd=JSON.parse(JSON.stringify(data)); nd.cols=(nd.cols||[]).filter(c=>c.id!==cid); pushData(nd,"Deleted a column"); },[data,pushData]);
   // Set a column's formula (typed as "=expr" in any cell) — applies to ALL rows automatically.
   const setColFormula=useCallback((cid,raw)=>{ if(!data)return; const f=String(raw||"").trim().replace(/^=/,"").trim(); const nd=JSON.parse(JSON.stringify(data)); const col=(nd.cols||[]).find(c=>c.id===cid); if(!col||col.formula===f)return; col.formula=f; pushData(nd,f?`Set formula for "${col.label}"`:`Cleared formula for "${col.label}"`); },[data,pushData]);
+  // Export the master BQ: open the bundled template and fill Material/Labour (or U-Rate)
+  // by matching each row's column-A CODE to the BUR library — preserving all colours/formats/formulas.
+  const exportMasterBQ=useCallback(async()=>{
+    try{
+      toast_("⏳ Building master BQ (this can take a few seconds)…");
+      const ExcelJS=(await import("exceljs")).default;
+      const res=await fetch(import.meta.env.BASE_URL+"boq-template.xlsx");
+      if(!res.ok)throw new Error("template file not found");
+      const wb=new ExcelJS.Workbook(); await wb.xlsx.load(await res.arrayBuffer());
+      const codeMap={}; for(const b of burItems){ const k=(b.code||"").trim().toLowerCase(); if(k&&!codeMap[k])codeMap[k]=b; }
+      const toStr=v=>{ if(v==null)return ""; if(typeof v==="object"){ if(v.richText)return v.richText.map(t=>t.text).join(""); if(v.text!=null)return String(v.text); if(v.result!=null)return String(v.result); return ""; } return String(v); };
+      let filled=0;
+      wb.eachSheet(ws=>{
+        let hr=0,cCode=0,cUnit=0,cMat=0,cLab=0,cRate=0;
+        for(let r=1;r<=Math.min(14,ws.rowCount);r++){
+          let found=false;
+          ws.getRow(r).eachCell({includeEmpty:false},(cell,col)=>{ const t=toStr(cell.value).trim().toUpperCase(); if(t==="CODE"){cCode=col;found=true;} if(t==="UNIT")cUnit=col; if(t.includes("MATERIAL"))cMat=col; if(t.includes("LABOUR"))cLab=col; if(t.includes("U/RATE"))cRate=col; });
+          if(found){hr=r;break;}
+        }
+        if(!hr||!cCode||!cUnit)return;
+        for(let r=hr+1;r<=ws.rowCount;r++){
+          const row=ws.getRow(r);
+          if(!toStr(row.getCell(cUnit).value).trim())continue;
+          const code=toStr(row.getCell(cCode).value).trim(); if(!code)continue;
+          const bur=codeMap[code.toLowerCase()]; if(!bur)continue;
+          if(cMat&&cLab){ const mc=row.getCell(cMat); if(!mc.formula)mc.value=+bur.material||0; const lc=row.getCell(cLab); if(!lc.formula)lc.value=+bur.labour||0; filled++; }
+          else if(cRate){ const rc=row.getCell(cRate); if(!rc.formula){rc.value=+bTot(bur)||0; filled++;} }
+        }
+      });
+      const out=await wb.xlsx.writeBuffer();
+      const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+      const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="CAG_Dormitory_Master_BQ_export.xlsx"; a.click(); URL.revokeObjectURL(url);
+      toast_(`✅ Master BQ exported — ${filled} rate rows filled by code`);
+    }catch(e){ toast_("⚠️ Export failed: "+(e&&e.message||e)); }
+  },[burItems,toast_]);
+
   // Export the BOQ (with computed custom columns) to a CSV that opens in Excel.
   const exportBOQ=useCallback(()=>{ if(!data)return; const cols=data.cols||[]; const esc=v=>{const s=String(v??"");return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}; const head=["Section","Ref","Description","Unit","Qty","Rate A","Amt A","Rate B","Amt B","Code","Remarks","By",...cols.map(c=>c.label)]; const rows=[]; data.sections.forEach(sec=>(sec.items||[]).forEach(it=>{const cxv=computeCols(it,cols);rows.push([sec.name,it.ref,it.desc,it.unit,it.qty,it.rA,(it.qty||0)*(it.rA||0),it.rB,(it.qty||0)*(it.rB||0),it.code,it.remarks,it.by,...cols.map(c=>cxv[c.id])]);})); const csv="﻿"+[head,...rows].map(r=>r.map(esc).join(",")).join("\r\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BOQ_export.csv"; a.click(); URL.revokeObjectURL(url); toast_(`✅ Exported ${rows.length} BOQ rows to Excel (CSV)`); },[data,toast_]);
 
@@ -390,7 +426,8 @@ export default function App(){
                         {ALL_COLS.map(col=><label key={col.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 2px",cursor:"pointer",fontSize:12}}><input type="checkbox" checked={visCols.has(col.id)} onChange={()=>toggleCol(col.id)} style={{accentColor:"#2563eb"}}/>{col.label}</label>)}
                       </div>}
                     </div>
-                    <button onClick={exportBOQ} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>⤓ Export Excel</button>
+                    <button onClick={exportMasterBQ} style={{background:"#7c3aed",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>⤓ Export Master BQ</button>
+                    <button onClick={exportBOQ} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>⤓ CSV</button>
                     <button onClick={addCol} style={{background:"#0d9488",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>＋ Insert Column</button>
                     <button onClick={()=>addItem(cs.id)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Row</button>
                   </div>
