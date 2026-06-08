@@ -93,6 +93,8 @@ export default function App(){
   const [expBur,setExpBur]=useState(null);
   const [burSearch,setBurSearch]=useState("");
   const [sortBy,setSortBy]=useState("code"); const [sortDir,setSortDir]=useState(1);
+  const [burView,setBurView]=useState("tabs");
+  const [burColW,setBurColW]=useState(()=>{try{return JSON.parse(localStorage.getItem("burColW")||"{}")}catch{return{}}});
   const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("");
   const [costModal,setCostModal]=useState(null);
   const [cType,setCType]=useState("subcon");
@@ -107,6 +109,8 @@ export default function App(){
   const [bqTplB64,setBqTplB64]=useState(null); const [bqTplName,setBqTplName]=useState(""); const [bqResult,setBqResult]=useState(null);
 
   const sTimer=useRef(null); const uRef=useRef(null); const pidRef=useRef(null); const dirtyRef=useRef(false); const pendingRef=useRef(null); const logRef=useRef([]); const burTimers=useRef({});
+  const burDragRef=useRef(null); const burColWRef=useRef(burColW); useEffect(()=>{burColWRef.current=burColW;},[burColW]);
+  useEffect(()=>{ const mm=e=>{ const d=burDragRef.current; if(!d)return; const w=Math.max(40,d.startW+(e.clientX-d.start)); setBurColW(p=>({...p,[d.k]:w})); }; const mu=()=>{ if(burDragRef.current){ try{localStorage.setItem("burColW",JSON.stringify(burColWRef.current));}catch{} burDragRef.current=null; } }; window.addEventListener("mousemove",mm); window.addEventListener("mouseup",mu); return ()=>{window.removeEventListener("mousemove",mm);window.removeEventListener("mouseup",mu);}; },[]);
   const user=authUser&&profile?{uid:authUser.uid,email:authUser.email,name:profile.name,role:profile.role}:null;
   useEffect(()=>{uRef.current=user;});
   useEffect(()=>{pidRef.current=pid;},[pid]);
@@ -155,7 +159,14 @@ export default function App(){
   useEffect(()=>{ if(!ready||!pid){setData(null);return;} return onSnapshot(doc(db,"projects",pid),s=>{ if(!s.exists())return; if(dirtyRef.current)return; const d=s.data(); setData({sections:d.sections||newSections(),cols:d.cols||[],ts:d.ts||0}); }); },[ready,pid]);
 
   // ── Project ops ─────────────────────────────────────────────────────────────
-  const createProject=async()=>{ const name=prompt("New project / tender name:"); if(!name||!name.trim())return; const ref=doc(collection(db,"projects")); try{ await setDoc(ref,{name:name.trim(),createdAt:Date.now(),sections:newSections(),cols:[],ts:Date.now()}); setPid(ref.id); setTab("boq"); addLogEntry(`Created project "${name.trim()}"`);}catch(e){toast_("⚠️ "+e.message);} };
+  const createProject=async()=>{
+    const name=prompt("New project / tender name:"); if(!name||!name.trim())return;
+    let sections=newSections(), cols=[];
+    const cur=projects&&projects.find(p=>p.id===pid);
+    if(data&&cur&&confirm(`Copy the BOQ from "${cur.name}" into the new project?\n\nOK = duplicate its BOQ rows & columns (BUR library is shared automatically)\nCancel = start with a blank BOQ`)){ sections=JSON.parse(JSON.stringify(data.sections||newSections())); cols=JSON.parse(JSON.stringify(data.cols||[])); }
+    const ref=doc(collection(db,"projects"));
+    try{ await setDoc(ref,{name:name.trim(),createdAt:Date.now(),sections,cols,ts:Date.now()}); setPid(ref.id); setTab("boq"); addLogEntry(`Created project "${name.trim()}"${sections[0]?.items?.length?" (copied)":""}`);}catch(e){toast_("⚠️ "+e.message);}
+  };
   const renameProject=async()=>{ const cur=projects?.find(p=>p.id===pid); const name=prompt("Rename project:",cur?.name||""); if(!name||!name.trim())return; try{await updateDoc(doc(db,"projects",pid),{name:name.trim()});}catch(e){toast_("⚠️ "+e.message);} };
   const deleteProject=async()=>{ if(!pid)return; const cur=projects?.find(p=>p.id===pid); if(!confirm(`Delete project "${cur?.name}" and all its BOQ items? This cannot be undone.`))return; try{await deleteDoc(doc(db,"projects",pid)); setPid(null);}catch(e){toast_("⚠️ "+e.message);} };
 
@@ -407,6 +418,51 @@ export default function App(){
   });
   const catTotal=_sorted.length; const catItems=_sorted.slice(0,BUR_MAX);
   const toggleSort=f=>{ if(sortBy===f)setSortDir(d=>-d); else{setSortBy(f);setSortDir(1);} };
+  const burCw=k=>burColW[k]??({desc:360,unit:60,code:150,labour:90,material:95,plant:80,rate:100,cd:90}[k]||80);
+  const startBurDrag=(k,e)=>{ e.preventDefault();e.stopPropagation(); burDragRef.current={k,start:e.clientX,startW:burCw(k)}; };
+  const burHead=[["desc","Description","left"],["unit","Unit","left"],["code","BUR Code","left"],["labour","Labour","right"],["material","Material","right"],["plant","Plant","right"],["rate","Rate (S$)","right"],["cd","Cost Data","center"]];
+  const burEmpty=(<div style={{background:"#fff",borderRadius:12,padding:40,textAlign:"center",color:"#94a3b8"}}><div style={{fontSize:36,marginBottom:8}}>📊</div><div style={{fontWeight:600,fontSize:14,marginBottom:4}}>No items{_q?" match your search":" here"}</div><div style={{fontSize:13}}>{_q?"Try a different search term":'Click "+ Add Item" or "Load master list"'}</div></div>);
+  const burTableEl=items=>(
+    <div style={{background:"#fff",borderRadius:8,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,tableLayout:"fixed"}}>
+        <colgroup><col style={{width:26}}/>{burHead.map(([k])=><col key={k} style={{width:burCw(k)}}/>)}<col style={{width:34}}/></colgroup>
+        <thead><tr style={{background:"#fef9c3",color:"#92400e",fontSize:11}}>
+          <th style={{borderBottom:"1px solid #fde68a"}}></th>
+          {burHead.map(([k,l,al])=><th key={k} style={{padding:"8px 8px",textAlign:al,fontWeight:700,borderBottom:"1px solid #fde68a",whiteSpace:"nowrap",position:"relative",overflow:"hidden"}}>{l}<div onMouseDown={e=>startBurDrag(k,e)} title="Drag to resize" style={{position:"absolute",top:0,right:0,width:8,height:"100%",cursor:"col-resize"}}/></th>)}
+          <th style={{borderBottom:"1px solid #fde68a"}}></th>
+        </tr></thead>
+        <tbody>
+          {items.map(item=>{
+            const isExp=expBur===item.id; const total=bTot(item); const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0); const cdCount=(item.costData||[]).length;
+            const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2}; const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
+            return(<Fragment key={item.id}>
+              <tr style={{borderBottom:"1px solid #f8fafc"}}>
+                <td style={{padding:"2px 4px",textAlign:"center",cursor:"pointer",color:isExp?"#2563eb":"#cbd5e1"}} onClick={()=>setExpBur(isExp?null:item.id)}>{isExp?"▼":"▶"}</td>
+                <td style={{padding:"3px 6px",overflow:"hidden"}}><input style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></td>
+                <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent",width:"100%"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
+                <td style={{padding:"3px 6px",overflow:"hidden"}}><input style={{width:"100%",border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})}/></td>
+                <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.labour??""} onChange={e=>updBur(item.id,{labour:+e.target.value||0})}/></td>
+                <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.material??""} onChange={e=>updBur(item.id,{material:+e.target.value||0})}/></td>
+                <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.plant??""} onChange={e=>updBur(item.id,{plant:+e.target.value||0})}/></td>
+                <td style={{padding:"3px 8px",textAlign:"right",fontWeight:700,color:"#1d4ed8",whiteSpace:"nowrap"}}>{fmt(total)}</td>
+                <td style={{padding:"3px 6px",textAlign:"center"}}><button onClick={()=>{setCostModal(item.id);setCType("subcon");}} style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#92400e",fontWeight:600,whiteSpace:"nowrap"}}>📊{cdCount?` ${cdCount}`:""}</button></td>
+                <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>delBur(item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></td>
+              </tr>
+              {isExp&&(<tr><td colSpan={10} style={{background:"#fafafa",padding:"12px 16px",borderBottom:"1px solid #eef2f7"}}>
+                <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
+                  <div><label style={lbl}>SUBCON (S$)</label><input type="number" style={{...inp,width:90}} value={item.subcon??""} onChange={e=>updBur(item.id,{subcon:+e.target.value||0})}/></div>
+                  <div><label style={lbl}>OH %</label><input type="number" style={{...inp,width:70}} value={item.oh??15} onChange={e=>updBur(item.id,{oh:+e.target.value||0})}/></div>
+                  <div><label style={lbl}>PROFIT %</label><input type="number" style={{...inp,width:70}} value={item.profit??10} onChange={e=>updBur(item.id,{profit:+e.target.value||0})}/></div>
+                  <div><label style={lbl}>CATEGORY</label><select style={{...inp,background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                  <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b> · OH({item.oh}%) <b>S$ {fmt(direct*(+item.oh||0)/100)}</b> · <span style={{color:"#1d4ed8",fontWeight:800}}>Total S$ {fmt(total)}/{item.unit}</span></div>
+                </div>
+              </td></tr>)}
+            </Fragment>);
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
   const projName=projects.find(p=>p.id===pid)?.name||"—";
 
   return(
@@ -587,12 +643,17 @@ export default function App(){
               <button onClick={loadMaster} style={{background:"#1e3a5f",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⬇ Load master list ({burSeed.items.length})</button>
             </div>
 
-            {/* Sortable column header */}
+            {/* Sortable column header + layout toggle */}
             <div style={{display:"flex",gap:6,marginBottom:8,fontSize:11,color:"#64748b",alignItems:"center",flexWrap:"wrap"}}>
               <span style={{fontWeight:700}}>Sort by:</span>
               {[["code","Code"],["desc","Description"],["unit","Unit"],["rate","Rate"],["cat","Category"]].map(([f,l])=>(
                 <button key={f} onClick={()=>toggleSort(f)} style={{border:"1px solid #e2e8f0",background:sortBy===f?"#1e3a5f":"#fff",color:sortBy===f?"#fff":"#475569",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>{l}{sortBy===f?(sortDir===1?" ▲":" ▼"):""}</button>
               ))}
+              <span style={{marginLeft:12,fontWeight:700}}>Layout:</span>
+              {[["tabs","📑 By tab"],["all","☰ All categories"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setBurView(v)} style={{border:"1px solid #e2e8f0",background:burView===v?"#1e3a5f":"#fff",color:burView===v?"#fff":"#475569",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>{l}</button>
+              ))}
+              <span style={{marginLeft:8,color:"#cbd5e1"}}>· drag column edges to resize</span>
             </div>
 
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
@@ -600,51 +661,15 @@ export default function App(){
               <button onClick={()=>addBurItem(selCat)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Item</button>
             </div>
 
-            {catItems.length===0?(
-              <div style={{background:"#fff",borderRadius:12,padding:40,textAlign:"center",color:"#94a3b8"}}>
-                <div style={{fontSize:36,marginBottom:8}}>📊</div>
-                <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>No items{_q?" match your search":" in this category"}</div>
-                <div style={{fontSize:13}}>{_q?"Try a different search term":'Click "+ Add Item" or "Load master list"'}</div>
-              </div>
-            ):(
-              <div style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                  <thead><tr style={{background:"#fef9c3",color:"#92400e",fontSize:11}}>
-                    {["","Description","Unit","BUR Code","Labour","Material","Plant","Rate (S$)","Cost Data",""].map((h,i)=><th key={i} style={{padding:"8px 8px",textAlign:(i>=4&&i<=7)?"right":"left",fontWeight:700,borderBottom:"1px solid #fde68a",whiteSpace:"nowrap"}}>{h}</th>)}
-                  </tr></thead>
-                  <tbody>
-                    {catItems.map(item=>{
-                      const isExp=expBur===item.id; const total=bTot(item); const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0); const cdCount=(item.costData||[]).length;
-                      const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2};
-                      const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
-                      return(<Fragment key={item.id}>
-                        <tr style={{borderBottom:"1px solid #f8fafc"}}>
-                          <td style={{padding:"2px 4px",textAlign:"center",cursor:"pointer",color:isExp?"#2563eb":"#cbd5e1"}} onClick={()=>setExpBur(isExp?null:item.id)}>{isExp?"▼":"▶"}</td>
-                          <td style={{padding:"3px 6px"}}><input style={{width:"100%",minWidth:240,border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></td>
-                          <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
-                          <td style={{padding:"3px 6px"}}><input style={{width:130,border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})}/></td>
-                          <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:66,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.labour??""} onChange={e=>updBur(item.id,{labour:+e.target.value||0})}/></td>
-                          <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:66,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.material??""} onChange={e=>updBur(item.id,{material:+e.target.value||0})}/></td>
-                          <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:66,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.plant??""} onChange={e=>updBur(item.id,{plant:+e.target.value||0})}/></td>
-                          <td style={{padding:"3px 8px",textAlign:"right",fontWeight:700,color:"#1d4ed8",whiteSpace:"nowrap"}}>{fmt(total)}</td>
-                          <td style={{padding:"3px 6px",textAlign:"center"}}><button onClick={()=>{setCostModal(item.id);setCType("subcon");}} style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#92400e",fontWeight:600,whiteSpace:"nowrap"}}>📊{cdCount?` ${cdCount}`:""}</button></td>
-                          <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>delBur(item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></td>
-                        </tr>
-                        {isExp&&(<tr><td colSpan={10} style={{background:"#fafafa",padding:"12px 16px",borderBottom:"1px solid #eef2f7"}}>
-                          <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
-                            <div><label style={lbl}>SUBCON (S$)</label><input type="number" style={{...inp,width:90}} value={item.subcon??""} onChange={e=>updBur(item.id,{subcon:+e.target.value||0})}/></div>
-                            <div><label style={lbl}>OH %</label><input type="number" style={{...inp,width:70}} value={item.oh??15} onChange={e=>updBur(item.id,{oh:+e.target.value||0})}/></div>
-                            <div><label style={lbl}>PROFIT %</label><input type="number" style={{...inp,width:70}} value={item.profit??10} onChange={e=>updBur(item.id,{profit:+e.target.value||0})}/></div>
-                            <div><label style={lbl}>CATEGORY</label><select style={{...inp,background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-                            <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b> · OH({item.oh}%) <b>S$ {fmt(direct*(+item.oh||0)/100)}</b> · <span style={{color:"#1d4ed8",fontWeight:800}}>Total S$ {fmt(total)}/{item.unit}</span></div>
-                          </div>
-                        </td></tr>)}
-                      </Fragment>);
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            {(()=>{
+              if(_q) return catItems.length?burTableEl(catItems):burEmpty;
+              if(burView==="all"){
+                const groups=cats.map(c=>({c,items:[...burItems.filter(b=>b.catId===c.id)].sort((a,b)=>{const f=sortBy==="cat"?"code":sortBy; if(f==="rate")return (bTot(a)-bTot(b))*sortDir; return String(a[f]||"").localeCompare(String(b[f]||""),undefined,{numeric:true})*sortDir;})}})).filter(g=>g.items.length);
+                if(!groups.length) return burEmpty;
+                return <div style={{display:"flex",flexDirection:"column",gap:14}}>{groups.map(g=><div key={g.c.id}><div style={{fontWeight:700,fontSize:13,color:"#92400e",background:"#fff9c4",padding:"7px 12px",borderRadius:"8px 8px 0 0",border:"1px solid #fde68a"}}>{g.c.name} <span style={{fontWeight:400,color:"#b45309"}}>({g.items.length})</span></div>{burTableEl(g.items)}</div>)}</div>;
+              }
+              return catItems.length?burTableEl(catItems):burEmpty;
+            })()}
           </div>
         )}
 
