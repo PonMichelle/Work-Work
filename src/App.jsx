@@ -85,6 +85,7 @@ export default function App(){
   const [rbu,setRbu]=useState({labour:"",material:"",plant:"",subcon:"",oh:15,profit:10});
   const [log,setLog]=useState([]);
   const [toast,setToast]=useState(null);
+  const [bqTplB64,setBqTplB64]=useState(null); const [bqTplName,setBqTplName]=useState(""); const [bqResult,setBqResult]=useState(null);
 
   const sTimer=useRef(null); const uRef=useRef(null); const pidRef=useRef(null); const dirtyRef=useRef(false); const pendingRef=useRef(null); const logRef=useRef([]); const burTimers=useRef({});
   const user=authUser&&profile?{uid:authUser.uid,email:authUser.email,name:profile.name,role:profile.role}:null;
@@ -127,6 +128,8 @@ export default function App(){
   useEffect(()=>{ if(!ready)return; const ref=doc(db,"meta","cats"); return onSnapshot(ref,s=>{ if(s.exists())setCats(s.data().list||[]); else{setCats(DEF_CATS);setDoc(ref,{list:DEF_CATS}).catch(()=>{});} }); },[ready]);
   // Keep the selected category valid when the category list changes (e.g. after loading the master list).
   useEffect(()=>{ if(cats.length&&!cats.some(c=>c.id===selCat))setSelCat(cats[0].id); },[cats]); // eslint-disable-line
+  // Per-project master BQ template override (uploaded). Falls back to the bundled CAG template.
+  useEffect(()=>{ if(!ready||!pid){setBqTplB64(null);setBqTplName("");return;} return onSnapshot(doc(db,"boqtemplate",pid),s=>{ if(s.exists()){setBqTplB64(s.data().b64||null);setBqTplName(s.data().name||"");}else{setBqTplB64(null);setBqTplName("");} }); },[ready,pid]);
   useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","log"),s=>{ const e=s.exists()?(s.data().entries||[]):[]; logRef.current=e; setLog(e); }); },[ready]);
 
   // Current project's BOQ
@@ -169,14 +172,15 @@ export default function App(){
   // by matching each row's column-A CODE to the BUR library — preserving all colours/formats/formulas.
   const exportMasterBQ=useCallback(async()=>{
     try{
-      toast_("⏳ Building master BQ (this can take a few seconds)…");
+      setBqResult(null); toast_("⏳ Building master BQ (a few seconds)…");
       const ExcelJS=(await import("exceljs")).default;
-      const res=await fetch(import.meta.env.BASE_URL+"boq-template.xlsx");
-      if(!res.ok)throw new Error("template file not found");
-      const wb=new ExcelJS.Workbook(); await wb.xlsx.load(await res.arrayBuffer());
+      let buf, tplName="CAG_Dormitory_Master_BQ.xlsx";
+      if(bqTplB64){ buf=Uint8Array.from(atob(bqTplB64),c=>c.charCodeAt(0)); tplName=bqTplName||tplName; }
+      else { const res=await fetch(import.meta.env.BASE_URL+"boq-template.xlsx"); if(!res.ok)throw new Error("template file not found"); buf=await res.arrayBuffer(); }
+      const wb=new ExcelJS.Workbook(); await wb.xlsx.load(buf);
       const codeMap={}; for(const b of burItems){ const k=(b.code||"").trim().toLowerCase(); if(k&&!codeMap[k])codeMap[k]=b; }
       const toStr=v=>{ if(v==null)return ""; if(typeof v==="object"){ if(v.richText)return v.richText.map(t=>t.text).join(""); if(v.text!=null)return String(v.text); if(v.result!=null)return String(v.result); return ""; } return String(v); };
-      let filled=0;
+      let filled=0; const unmatched=new Set(); let scanned=0;
       wb.eachSheet(ws=>{
         let hr=0,cCode=0,cUnit=0,cMat=0,cLab=0,cRate=0;
         for(let r=1;r<=Math.min(14,ws.rowCount);r++){
@@ -189,17 +193,24 @@ export default function App(){
           const row=ws.getRow(r);
           if(!toStr(row.getCell(cUnit).value).trim())continue;
           const code=toStr(row.getCell(cCode).value).trim(); if(!code)continue;
-          const bur=codeMap[code.toLowerCase()]; if(!bur)continue;
+          scanned++;
+          const bur=codeMap[code.toLowerCase()]; if(!bur){unmatched.add(code);continue;}
           if(cMat&&cLab){ const mc=row.getCell(cMat); if(!mc.formula)mc.value=+bur.material||0; const lc=row.getCell(cLab); if(!lc.formula)lc.value=+bur.labour||0; filled++; }
           else if(cRate){ const rc=row.getCell(cRate); if(!rc.formula){rc.value=+bTot(bur)||0; filled++;} }
         }
       });
       const out=await wb.xlsx.writeBuffer();
       const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-      const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="CAG_Dormitory_Master_BQ_export.xlsx"; a.click(); URL.revokeObjectURL(url);
-      toast_(`✅ Master BQ exported — ${filled} rate rows filled by code`);
+      const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=tplName.replace(/\.xlsx$/i,"")+"_priced.xlsx"; a.click(); URL.revokeObjectURL(url);
+      setBqResult({filled,scanned,unmatched:[...unmatched].sort(),tpl:tplName});
+      toast_(`✅ Exported — ${filled} of ${scanned} rate rows filled`);
     }catch(e){ toast_("⚠️ Export failed: "+(e&&e.message||e)); }
-  },[burItems,toast_]);
+  },[burItems,bqTplB64,bqTplName,toast_]);
+  const onTemplateFile=useCallback(async file=>{
+    if(!file)return; if(!/\.xlsx$/i.test(file.name)){toast_("⚠️ Use a .xlsx file");return;}
+    try{ const bytes=new Uint8Array(await file.arrayBuffer()); let bin=""; const CH=0x8000; for(let i=0;i<bytes.length;i+=CH)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CH)); const b=btoa(bin); if(b.length>980000){toast_("⚠️ Template too large (keep under ~700 KB)");return;} await setDoc(doc(db,"boqtemplate",pid),{b64:b,name:file.name}); toast_("✅ Template updated to "+file.name); }
+    catch(e){ toast_("⚠️ "+e.message); }
+  },[db,pid,toast_]);
 
   // Export the BOQ (with computed custom columns) to a CSV that opens in Excel.
   const exportBOQ=useCallback(()=>{ if(!data)return; const cols=data.cols||[]; const esc=v=>{const s=String(v??"");return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}; const head=["Section","Ref","Description","Unit","Qty","Rate A","Amt A","Rate B","Amt B","Code","Remarks","By",...cols.map(c=>c.label)]; const rows=[]; data.sections.forEach(sec=>(sec.items||[]).forEach(it=>{const cxv=computeCols(it,cols);rows.push([sec.name,it.ref,it.desc,it.unit,it.qty,it.rA,(it.qty||0)*(it.rA||0),it.rB,(it.qty||0)*(it.rB||0),it.code,it.remarks,it.by,...cols.map(c=>cxv[c.id])]);})); const csv="﻿"+[head,...rows].map(r=>r.map(esc).join(",")).join("\r\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BOQ_export.csv"; a.click(); URL.revokeObjectURL(url); toast_(`✅ Exported ${rows.length} BOQ rows to Excel (CSV)`); },[data,toast_]);
@@ -409,8 +420,46 @@ export default function App(){
 
       <div style={{flex:1,overflow:"auto",padding:12}}>
 
-        {/* ══ BOQ (Excel grid) ══ */}
-        {tab==="boq"&&<SheetGrid db={db} pid={pid} toast={toast_} baseUrl={import.meta.env.BASE_URL} burLookup={code=>{const b=burItems.find(x=>(x.code||"").trim().toLowerCase()===String(code).trim().toLowerCase()); return b?{material:+b.material||0,labour:+b.labour||0,total:+bTot(b)||0}:null;}}/>}
+        {/* ══ BOQ — Master BQ rate feed ══ */}
+        {tab==="boq"&&(
+          <div style={{maxWidth:760,margin:"0 auto",display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{background:"#fff",borderRadius:12,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>
+              <div style={{fontWeight:700,fontSize:16,color:"#1e293b",marginBottom:6}}>📋 Master BQ — Rate Feed</div>
+              <div style={{fontSize:13,color:"#475569",lineHeight:1.6,marginBottom:14}}>
+                Keep building your BOQ in your own Excel master BQ (where all the formulas, colours and formatting already work). This app holds your <b>BUR rate library</b> and prices the BQ for you: it opens your template, and for every row it fills <b>Material &amp; Labour</b> (or U-Rate) by matching the <b>CODE in column A</b> to the BUR library — keeping your format and formulas 100% intact.
+              </div>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+                <button onClick={exportMasterBQ} style={{background:"#7c3aed",color:"#fff",border:"none",borderRadius:10,padding:"11px 20px",fontSize:14,fontWeight:700,cursor:"pointer"}}>⤓ Export priced Master BQ</button>
+                <label style={{background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:10,padding:"10px 16px",fontSize:13,fontWeight:600,cursor:"pointer",color:"#475569"}}>Update template…<input type="file" accept=".xlsx" style={{display:"none"}} onChange={e=>onTemplateFile(e.target.files[0])}/></label>
+              </div>
+              <div style={{fontSize:12,color:"#94a3b8",marginTop:10}}>Template in use: <b style={{color:"#475569"}}>{bqTplName||"CAG_Dormitory_Master_BQ.xlsx (built-in)"}</b> · {burItems.length} BUR codes available</div>
+            </div>
+
+            {bqResult&&(
+              <div style={{background:"#fff",borderRadius:12,padding:18,boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>
+                <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:bqResult.unmatched.length?12:0}}>
+                  <div style={{background:"#dcfce7",borderRadius:10,padding:"12px 18px",textAlign:"center"}}><div style={{fontSize:24,fontWeight:800,color:"#15803d"}}>{bqResult.filled}</div><div style={{fontSize:11,color:"#15803d",fontWeight:600}}>rates filled</div></div>
+                  <div style={{background:"#fef9c3",borderRadius:10,padding:"12px 18px",textAlign:"center"}}><div style={{fontSize:24,fontWeight:800,color:"#b45309"}}>{bqResult.unmatched.length}</div><div style={{fontSize:11,color:"#b45309",fontWeight:600}}>codes not in BUR</div></div>
+                  <div style={{background:"#eff6ff",borderRadius:10,padding:"12px 18px",textAlign:"center"}}><div style={{fontSize:24,fontWeight:800,color:"#1d4ed8"}}>{bqResult.scanned}</div><div style={{fontSize:11,color:"#1d4ed8",fontWeight:600}}>priced rows scanned</div></div>
+                </div>
+                {bqResult.unmatched.length>0&&(
+                  <div>
+                    <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:6}}>⚠️ Codes in the BQ with no matching BUR rate — add these to the BUR tab, then export again:</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>{bqResult.unmatched.map(c=><span key={c} style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,fontFamily:"monospace",color:"#92400e"}}>{c}</span>)}</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{background:"#fff",borderRadius:12,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,.08)",fontSize:12,color:"#64748b",lineHeight:1.7}}>
+              <b style={{color:"#1e293b"}}>How it works</b><br/>
+              1. Maintain rates in the <b>BUR</b> tab (each item has a code, Material &amp; Labour).<br/>
+              2. Your master BQ's column A holds those codes.<br/>
+              3. Click <b>Export priced Master BQ</b> → download your template, fully formatted, with rates filled in.<br/>
+              4. Need a different/updated BQ structure? Click <b>Update template</b> to upload a new .xlsx (used for this project).
+            </div>
+          </div>
+        )}
         {false&&(
           <div>
             <div style={{display:"flex",gap:8,marginBottom:12,overflowX:"auto",paddingBottom:4}}>
