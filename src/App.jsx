@@ -99,7 +99,7 @@ export default function App(){
   const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("");
   const [costModal,setCostModal]=useState(null);
   const [cType,setCType]=useState("subcon");
-  const [cForm,setCForm]=useState({supplier:"",rate:"",date:"",note:"",img:""});
+  const [cForm,setCForm]=useState({supplier:"",rate:"",date:"",note:"",imgs:[]});
   const [imgView,setImgView]=useState(null);
   const [newCat,setNewCat]=useState(""); const [showNewCat,setShowNewCat]=useState(false);
   const [codes,setCodes]=useState(DEF_CODES);
@@ -288,9 +288,21 @@ export default function App(){
         }
       }
       ws.views=[{state:"frozen",ySplit:2}];
+      // Photos sheet — embed every cost-data photo with its item/supplier
+      const photos=[];
+      for(const b of burItems){ for(const e of (b.costData||[])){ const ph=e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[]); for(const p of ph)photos.push({code:b.code,desc:b.desc,supplier:e.supplier,rate:e.rate,data:p}); } }
+      if(photos.length){
+        const ps=wb.addWorksheet("Photos"); ps.columns=[{width:22},{width:42},{width:24},{width:12},{width:32}];
+        const ph=ps.getRow(1); ["Code","Description","Supplier","Rate (S$)","Photo"].forEach((h,i)=>{const c=ph.getCell(i+1);c.value=h;c.font={bold:true};c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}};c.border=bd;}); ph.height=20;
+        let rr=2;
+        for(const p of photos){ const row=ps.getRow(rr); row.getCell(1).value=p.code||""; row.getCell(2).value=p.desc||""; row.getCell(3).value=p.supplier||""; row.getCell(4).value=+p.rate||null; row.getCell(4).numFmt="#,##0.00"; [1,2,3,4,5].forEach(ci=>row.getCell(ci).border=bd); row.height=96;
+          try{ const m=/^data:image\/(\w+);base64,(.+)$/.exec(p.data); if(m){ const id=wb.addImage({base64:m[2],extension:(m[1]==="jpg"?"jpeg":m[1])}); ps.addImage(id,{tl:{col:4,row:rr-1},ext:{width:124,height:92}}); } }catch{}
+          rr++;
+        }
+      }
       const out=await wb.xlsx.writeBuffer(); const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
       const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR_BuildUpRates.xlsx"; a.click(); URL.revokeObjectURL(url);
-      toast_(`✅ Exported ${count} BUR items, grouped by category`);
+      toast_(`✅ Exported ${count} items${photos.length?` + ${photos.length} photos`:""}`);
     }catch(e){ toast_("⚠️ Export failed: "+(e&&e.message||e)); }
   },[burItems,cats,toast_]);
 
@@ -349,8 +361,8 @@ export default function App(){
   const modalItem=costModal?burItems.find(b=>b.id===costModal):null;
   const costEntries=modalItem?(modalItem.costData||[]).filter(e=>e.component===cType):[];
 
-  const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!cForm.rate){toast_("⚠️ Enter supplier and rate");return;} const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:+cForm.rate,date:cForm.date,note:cForm.note,img:cForm.img||""}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",note:"",img:""}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
-  const pickCostImg=useCallback(async file=>{ if(!file)return; const d=await imgToDataURL(file); if(!d){toast_("⚠️ Could not read image");return;} if(d.length>1400000){toast_("⚠️ Image too large — use a smaller crop");return;} setCForm(f=>({...f,img:d})); },[toast_]);
+  const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!cForm.rate){toast_("⚠️ Enter supplier and rate");return;} const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:+cForm.rate,date:cForm.date,note:cForm.note,imgs:cForm.imgs||[]}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",note:"",imgs:[]}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
+  const pickCostImg=useCallback(async files=>{ const list=files&&files.length!=null?[...files]:(files?[files]:[]); if(!list.length)return; const out=[]; for(const file of list){ const d=await imgToDataURL(file); if(d&&d.length<=1400000)out.push(d); else if(d)toast_("⚠️ One image too large, skipped"); } if(out.length)setCForm(f=>({...f,imgs:[...(f.imgs||[]),...out]})); },[toast_]);
   const delCostEntry=useCallback(eid=>{ const b=burItems.find(x=>x.id===costModal); if(!b)return; setBurField(costModal,{costData:(b.costData||[]).filter(e=>e.id!==eid)}); },[costModal,burItems]);
   const useCostEntry=useCallback(entry=>{ setBurField(costModal,{subcon:entry.rate,quote:null}); toast_(`✅ Sub-con rate set: S$ ${fmt(entry.rate)} (${entry.supplier})`); },[costModal]);
   const approveQuote=useCallback(id=>{ if(!uRef.current)return; const b=burItems.find(x=>x.id===id); if(!b||!b.quote)return; setBurField(id,{quote:{...b.quote,status:"approved",approvedBy:uRef.current.name,approvedAt:new Date().toLocaleString("en-SG")}}); toast_(`✅ Approved by ${uRef.current.name}`); },[burItems]);
@@ -861,7 +873,7 @@ export default function App(){
                         <td style={{padding:"10px 10px",textAlign:"right",color:"#1d4ed8",fontWeight:700,fontSize:14}}>S$ {fmt(e.rate)}</td>
                         <td style={{padding:"10px 10px",color:"#64748b"}}>{e.date||"—"}</td>
                         <td style={{padding:"10px 10px",color:"#94a3b8",fontSize:11}}>{e.note||"—"}</td>
-                        <td style={{padding:"6px 10px"}}>{e.img?<img src={e.img} alt="" onClick={()=>setImgView(e.img)} style={{height:34,maxWidth:60,objectFit:"cover",borderRadius:4,cursor:"zoom-in",border:"1px solid #e2e8f0"}}/>:<span style={{color:"#cbd5e1"}}>—</span>}</td>
+                        <td style={{padding:"6px 10px"}}>{(()=>{const ph=e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[]); return ph.length?<div style={{display:"flex",gap:3,flexWrap:"wrap",maxWidth:120}}>{ph.map((p,i)=><img key={i} src={p} alt="" onClick={()=>setImgView(p)} style={{height:30,width:40,objectFit:"cover",borderRadius:3,cursor:"zoom-in",border:"1px solid #e2e8f0"}}/>)}</div>:<span style={{color:"#cbd5e1"}}>—</span>;})()}</td>
                         <td style={{padding:"10px 8px"}}>
                           <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
                             {cType==="subcon"&&<button onClick={()=>useCostEntry(e)} style={{background:"#f59e0b",color:"#fff",border:"none",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:700,whiteSpace:"nowrap"}}>→ Use as Quote</button>}
@@ -882,12 +894,12 @@ export default function App(){
                   ))}
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
-                  <label style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:7,padding:"6px 12px",fontSize:12,cursor:"pointer",color:"#475569",fontWeight:600}}>📷 Attach photo<input type="file" accept="image/*" style={{display:"none"}} onChange={e=>pickCostImg(e.target.files[0])}/></label>
-                  <span style={{fontSize:11,color:"#94a3b8"}}>…or paste a screenshot (Ctrl+V) anywhere in this window</span>
-                  {cForm.img&&<span style={{display:"inline-flex",alignItems:"center",gap:6}}><img src={cForm.img} alt="" style={{height:38,borderRadius:4,border:"1px solid #e2e8f0"}}/><button onClick={()=>setCForm(f=>({...f,img:""}))} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></span>}
+                  <label style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:7,padding:"6px 12px",fontSize:12,cursor:"pointer",color:"#475569",fontWeight:600}}>📷 Attach photo(s)<input type="file" accept="image/*" multiple style={{display:"none"}} onChange={e=>pickCostImg(e.target.files)}/></label>
+                  <span style={{fontSize:11,color:"#94a3b8"}}>…or paste screenshots (Ctrl+V) — you can add many</span>
+                  {(cForm.imgs||[]).map((p,i)=><span key={i} style={{display:"inline-flex",alignItems:"center",gap:3}}><img src={p} alt="" style={{height:38,width:50,objectFit:"cover",borderRadius:4,border:"1px solid #e2e8f0"}}/><button onClick={()=>setCForm(f=>({...f,imgs:f.imgs.filter((_,j)=>j!==i)}))} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:12,fontWeight:700}}>✕</button></span>)}
                 </div>
                 <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-                  <button onClick={()=>setCForm({supplier:"",rate:"",date:"",note:"",img:""})} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"7px 14px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>
+                  <button onClick={()=>setCForm({supplier:"",rate:"",date:"",note:"",imgs:[]})} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"7px 14px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>
                   <button onClick={addCostEntry} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontSize:12,cursor:"pointer",fontWeight:600}}>Add Entry</button>
                 </div>
               </div>
