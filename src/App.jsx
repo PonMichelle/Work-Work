@@ -162,6 +162,10 @@ export default function App(){
     pushData(nd,`Added column "${label.trim()}"`);
   },[data,pushData]);
   const delCol=useCallback(cid=>{ if(!data||!confirm("Delete this column?"))return; const nd=JSON.parse(JSON.stringify(data)); nd.cols=(nd.cols||[]).filter(c=>c.id!==cid); pushData(nd,"Deleted a column"); },[data,pushData]);
+  // Set a column's formula (typed as "=expr" in any cell) — applies to ALL rows automatically.
+  const setColFormula=useCallback((cid,raw)=>{ if(!data)return; const f=String(raw||"").trim().replace(/^=/,"").trim(); const nd=JSON.parse(JSON.stringify(data)); const col=(nd.cols||[]).find(c=>c.id===cid); if(!col||col.formula===f)return; col.formula=f; pushData(nd,f?`Set formula for "${col.label}"`:`Cleared formula for "${col.label}"`); },[data,pushData]);
+  // Export the BOQ (with computed custom columns) to a CSV that opens in Excel.
+  const exportBOQ=useCallback(()=>{ if(!data)return; const cols=data.cols||[]; const esc=v=>{const s=String(v??"");return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}; const head=["Section","Ref","Description","Unit","Qty","Rate A","Amt A","Rate B","Amt B","Code","Remarks","By",...cols.map(c=>c.label)]; const rows=[]; data.sections.forEach(sec=>(sec.items||[]).forEach(it=>{const cxv=computeCols(it,cols);rows.push([sec.name,it.ref,it.desc,it.unit,it.qty,it.rA,(it.qty||0)*(it.rA||0),it.rB,(it.qty||0)*(it.rB||0),it.code,it.remarks,it.by,...cols.map(c=>cxv[c.id])]);})); const csv="﻿"+[head,...rows].map(r=>r.map(esc).join(",")).join("\r\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BOQ_export.csv"; a.click(); URL.revokeObjectURL(url); toast_(`✅ Exported ${rows.length} BOQ rows to Excel (CSV)`); },[data,toast_]);
 
   // Export the whole BUR library to a CSV (opens in Excel)
   const exportBUR=useCallback(()=>{
@@ -386,6 +390,7 @@ export default function App(){
                         {ALL_COLS.map(col=><label key={col.id} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 2px",cursor:"pointer",fontSize:12}}><input type="checkbox" checked={visCols.has(col.id)} onChange={()=>toggleCol(col.id)} style={{accentColor:"#2563eb"}}/>{col.label}</label>)}
                       </div>}
                     </div>
+                    <button onClick={exportBOQ} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>⤓ Export Excel</button>
                     <button onClick={addCol} style={{background:"#0d9488",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>＋ Insert Column</button>
                     <button onClick={()=>addItem(cs.id)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Row</button>
                   </div>
@@ -399,7 +404,7 @@ export default function App(){
                     </tr></thead>
                     <tbody>
                       {!cs.items?.length?<tr><td colSpan={vcols.length+(data.cols?.length||0)+1} style={{padding:"32px",textAlign:"center",color:"#94a3b8",fontSize:13}}>No items — click + Add Row</td></tr>
-                      :cs.items.map(item=>{ const cxv=computeCols(item,data.cols); return (
+                      :cs.items.map((item,ri)=>{ const cxv=computeCols(item,data.cols); return (
                         <tr key={item.id} style={{borderBottom:"1px solid #f8fafc"}}>
                           {vcols.map(col=>{
                             const p={padding:"4px 6px"};
@@ -417,9 +422,13 @@ export default function App(){
                             if(col.id==="by")return<td key={col.id} style={{...p,textAlign:"right",color:"#94a3b8",fontSize:10}}>{item.by||"—"}</td>;
                             return null;
                           })}
-                          {(data.cols||[]).map(c=>c.formula
-                            ?<td key={c.id} style={{padding:"4px 6px",textAlign:"right",color:"#0f766e",fontWeight:600,whiteSpace:"nowrap"}}>{typeof cxv[c.id]==="number"?fmt(cxv[c.id]):cxv[c.id]}</td>
-                            :<td key={c.id} style={{padding:"4px 6px"}}><input style={{width:90,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.cx?.[c.id]??""} onChange={e=>updItem(cs.id,item.id,{cx:{...(item.cx||{}),[c.id]:e.target.value}})} onBlur={()=>blurSave(cs.id,item.id,item.code)}/></td>)}
+                          {(data.cols||[]).map(c=>{
+                            if(c.formula){
+                              if(ri===0)return<td key={c.id} style={{padding:"4px 6px"}}><input key={c.id+c.formula} defaultValue={"="+c.formula} title="Edit this formula — every row updates automatically" onBlur={e=>setColFormula(c.id,e.target.value)} style={{width:120,border:"1px dashed #5eead4",borderRadius:4,fontSize:12,outline:"none",background:"#f0fdfa",textAlign:"right",color:"#0d9488",fontStyle:"italic",padding:"2px 4px"}}/></td>;
+                              return<td key={c.id} style={{padding:"4px 6px",textAlign:"right",color:"#0f766e",fontWeight:600,whiteSpace:"nowrap"}}>{typeof cxv[c.id]==="number"?fmt(cxv[c.id]):cxv[c.id]}</td>;
+                            }
+                            return<td key={c.id} style={{padding:"4px 6px"}}><input style={{width:96,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} placeholder={ri===0?"= formula / value":""} value={item.cx?.[c.id]??""} onChange={e=>updItem(cs.id,item.id,{cx:{...(item.cx||{}),[c.id]:e.target.value}})} onBlur={e=>{ if(e.target.value.trim().startsWith("="))setColFormula(c.id,e.target.value); else blurSave(cs.id,item.id,item.code); }}/></td>;
+                          })}
                           <td style={{padding:"4px 4px",textAlign:"center"}}><button onClick={()=>delItem(cs.id,item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></td>
                         </tr>
                       );})}
