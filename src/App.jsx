@@ -259,27 +259,40 @@ export default function App(){
   // Export the BOQ (with computed custom columns) to a CSV that opens in Excel.
   const exportBOQ=useCallback(()=>{ if(!data)return; const cols=data.cols||[]; const esc=v=>{const s=String(v??"");return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}; const head=["Section","Ref","Description","Unit","Qty","Rate A","Amt A","Rate B","Amt B","Code","Remarks","By",...cols.map(c=>c.label)]; const rows=[]; data.sections.forEach(sec=>(sec.items||[]).forEach(it=>{const cxv=computeCols(it,cols);rows.push([sec.name,it.ref,it.desc,it.unit,it.qty,it.rA,(it.qty||0)*(it.rA||0),it.rB,(it.qty||0)*(it.rB||0),it.code,it.remarks,it.by,...cols.map(c=>cxv[c.id])]);})); const csv="﻿"+[head,...rows].map(r=>r.map(esc).join(",")).join("\r\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BOQ_export.csv"; a.click(); URL.revokeObjectURL(url); toast_(`✅ Exported ${rows.length} BOQ rows to Excel (CSV)`); },[data,toast_]);
 
-  // Export the whole BUR library to a CSV (opens in Excel)
+  // Build the BUR export from LIVE data, grouped by category, formatted like the master build-up sheet.
   const exportBUR=useCallback(async()=>{
     try{
-      toast_("⏳ Building BUR in your template (a few seconds)…");
+      toast_("⏳ Building BUR Excel…");
       const ExcelJS=(await import("exceljs")).default;
-      const res=await fetch(import.meta.env.BASE_URL+"bur-template.xlsx"); if(!res.ok)throw new Error("BUR template not found");
-      const wb=new ExcelJS.Workbook(); await wb.xlsx.load(await res.arrayBuffer());
-      const codeMap={}; for(const b of burItems){ const k=(b.code||"").trim().toLowerCase(); if(k&&!codeMap[k])codeMap[k]=b; }
-      const toStr=v=>{ if(v==null)return ""; if(typeof v==="object"){ if(v.richText)return v.richText.map(t=>t.text).join(""); if(v.text!=null)return String(v.text); if(v.result!=null)return String(v.result); return ""; } return String(v); };
-      let filled=0;
-      wb.eachSheet(ws=>{
-        let hr=0,cCode=0,cRate=0;
-        for(let r=1;r<=Math.min(12,ws.rowCount);r++){ let f=false; ws.getRow(r).eachCell({includeEmpty:false},(cell,col)=>{ const t=toStr(cell.value).trim().toUpperCase(); if(t==="CODE"){cCode=col;f=true;} if(t==="RATE"){cRate=col;} }); if(f){hr=r;break;} }
-        if(!hr||!cCode||!cRate)return;
-        for(let r=hr+1;r<=ws.rowCount;r++){ const row=ws.getRow(r); const code=toStr(row.getCell(cCode).value).trim(); if(!code)continue; const bur=codeMap[code.toLowerCase()]; if(!bur)continue; const rc=row.getCell(cRate); if(!rc.formula){ const rate=+bTot(bur)||0; rc.value=rate>0?rate:null; if(rate>0)filled++; } }
-      });
+      const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("BUILD UP RATES");
+      const bd={top:{style:"thin",color:{argb:"FFBFBFBF"}},left:{style:"thin",color:{argb:"FFBFBFBF"}},bottom:{style:"thin",color:{argb:"FFBFBFBF"}},right:{style:"thin",color:{argb:"FFBFBFBF"}}};
+      const headers=["Description","Unit","Code","Labour","Material","Plant","Subcon","Rate","Sub-Con Quotes"];
+      ws.columns=[{width:50},{width:8},{width:22},{width:10},{width:11},{width:9},{width:11},{width:12},{width:55}];
+      const moneyCols=new Set([4,5,6,7,8]);
+      // group by category
+      const groups=[]; const known=new Set();
+      for(const cat of cats){ known.add(cat.id); const items=burItems.filter(b=>b.catId===cat.id).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(items.length)groups.push({name:cat.name,items}); }
+      const orphan=burItems.filter(b=>!known.has(b.catId)).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(orphan.length)groups.push({name:"(Uncategorised)",items:orphan});
+      ws.mergeCells(1,1,1,headers.length); const t=ws.getCell(1,1); t.value="BUILD UP RATES"; t.font={bold:true,size:14,color:{argb:"FF1E3A5F"}};
+      const hr=ws.getRow(2); headers.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font={bold:true}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}}; c.border=bd; c.alignment={horizontal:(i>=3&&i<=7)?"right":"left",vertical:"middle",wrapText:true}; }); hr.height=22;
+      let r=3, count=0;
+      for(const g of groups){
+        ws.mergeCells(r,1,r,headers.length); const cc=ws.getCell(r,1); cc.value=g.name+"  ("+g.items.length+")"; cc.font={bold:true,color:{argb:"FF92400E"}}; cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF9C4"}}; cc.border=bd; r++;
+        for(const it of g.items){
+          const q=(it.costData||[]).filter(e=>e.component==="subcon").map(e=>`${e.supplier}: ${e.rate}${e.date?` (${e.date})`:""}`).join("  |  ");
+          const total=+bTot(it)||0;
+          const vals=[it.desc||"",it.unit||"",it.code||"",+it.labour||0,+it.material||0,+it.plant||0,+it.subcon||0,total,q];
+          const row=ws.getRow(r);
+          vals.forEach((v,i)=>{ const c=row.getCell(i+1); c.value=(moneyCols.has(i+1)&&!(+v>0))?null:v; c.border=bd; c.alignment={vertical:"top",horizontal:(i>=3&&i<=7)?"right":"left",wrapText:(i===0||i===8)}; if(moneyCols.has(i+1))c.numFmt="#,##0.00"; if(i===2)c.font={name:"Consolas",color:{argb:"FF1D4ED8"}}; if(i===7)c.font={bold:true,color:{argb:"FF1D4ED8"}}; });
+          r++; count++;
+        }
+      }
+      ws.views=[{state:"frozen",ySplit:2}];
       const out=await wb.xlsx.writeBuffer(); const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-      const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR_priced.xlsx"; a.click(); URL.revokeObjectURL(url);
-      toast_(`✅ BUR exported in your template — ${filled} rates updated by code`);
+      const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR_BuildUpRates.xlsx"; a.click(); URL.revokeObjectURL(url);
+      toast_(`✅ Exported ${count} BUR items, grouped by category`);
     }catch(e){ toast_("⚠️ Export failed: "+(e&&e.message||e)); }
-  },[burItems,toast_]);
+  },[burItems,cats,toast_]);
 
   // ── BUR writes (per-document in shared library) ─────────────────────────────
   const addBurItem=useCallback(async catId=>{ const ref=doc(collection(db,"bur")); try{ await setDoc(ref,{pid,catId,code:"",desc:"New Item",unit:"sum",labour:0,material:0,plant:0,subcon:0,oh:15,profit:10,costData:[],quote:null,group:""}); setExpBur(ref.id);}catch(e){toast_("⚠️ "+e.message);} },[pid]);
