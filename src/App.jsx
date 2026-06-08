@@ -664,7 +664,7 @@ export default function App(){
             {(()=>{
               if(_q) return catItems.length?burTableEl(catItems):burEmpty;
               if(burView==="all"){
-                const groups=cats.map(c=>({c,items:[...burItems.filter(b=>b.catId===c.id)].sort((a,b)=>{const f=sortBy==="cat"?"code":sortBy; if(f==="rate")return (bTot(a)-bTot(b))*sortDir; return String(a[f]||"").localeCompare(String(b[f]||""),undefined,{numeric:true})*sortDir;})}})).filter(g=>g.items.length);
+                const groups=cats.map(c=>({c,items:[...burItems.filter(b=>b.catId===c.id)].sort((a,b)=>{const f=sortBy==="cat"?"code":sortBy; if(f==="rate")return (bTot(a)-bTot(b))*sortDir; return String(a[f]||"").localeCompare(String(b[f]||""),undefined,{numeric:true})*sortDir;})})).filter(g=>g.items.length);
                 if(!groups.length) return burEmpty;
                 return <div style={{display:"flex",flexDirection:"column",gap:14}}>{groups.map(g=><div key={g.c.id}><div style={{fontWeight:700,fontSize:13,color:"#92400e",background:"#fff9c4",padding:"7px 12px",borderRadius:"8px 8px 0 0",border:"1px solid #fde68a"}}>{g.c.name} <span style={{fontWeight:400,color:"#b45309"}}>({g.items.length})</span></div>{burTableEl(g.items)}</div>)}</div>;
               }
