@@ -96,7 +96,7 @@ export default function App(){
   const [expBur,setExpBur]=useState(null);
   const [burSearch,setBurSearch]=useState("");
   const [sortBy,setSortBy]=useState("code"); const [sortDir,setSortDir]=useState(1);
-  const [burView,setBurView]=useState("tabs");
+  const [burView,setBurView]=useState("tabs"); const [catSort,setCatSort]=useState("none");
   const [burColW,setBurColW]=useState(()=>{try{return JSON.parse(localStorage.getItem("burColW")||"{}")}catch{return{}}});
   const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("");
   const [costModal,setCostModal]=useState(null);
@@ -446,6 +446,7 @@ export default function App(){
   const vcols=ALL_COLS.filter(c=>visCols.has(c.id));
   const cc=cSum();
   const displayCats=cats;
+  const sidebarCats=catSort==="none"?displayCats:[...displayCats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
   const catName=id=>displayCats.find(c=>c.id===id)?.name||id;
   const BUR_MAX=200; const _q=burSearch.trim().toLowerCase();
   // When searching, look across the WHOLE BUR library; otherwise show the selected category.
@@ -668,8 +669,14 @@ export default function App(){
           <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
             {/* Left vertical category sidebar */}
             <div style={{width:208,flexShrink:0,background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",maxHeight:"80vh",overflow:"auto",padding:8}}>
-              <div style={{fontSize:10,fontWeight:700,color:"#94a3b8",padding:"4px 8px",letterSpacing:".5px"}}>CATEGORIES</div>
-              {displayCats.map(c=>{const n=burItems.filter(b=>b.catId===c.id).length; const sel=selCat===c.id; return(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 6px"}}>
+                <span style={{fontSize:10,fontWeight:700,color:"#94a3b8",letterSpacing:".5px"}}>CATEGORIES</span>
+                <div style={{display:"flex",gap:3}}>
+                  <button onClick={()=>setCatSort(s=>s==="az"?"none":"az")} title="Sort A → Z" style={{border:"none",borderRadius:5,padding:"2px 6px",fontSize:10,fontWeight:700,cursor:"pointer",background:catSort==="az"?"#7c3aed":"#f1f5f9",color:catSort==="az"?"#fff":"#64748b"}}>A↓Z</button>
+                  <button onClick={()=>setCatSort(s=>s==="za"?"none":"za")} title="Sort Z → A" style={{border:"none",borderRadius:5,padding:"2px 6px",fontSize:10,fontWeight:700,cursor:"pointer",background:catSort==="za"?"#7c3aed":"#f1f5f9",color:catSort==="za"?"#fff":"#64748b"}}>Z↓A</button>
+                </div>
+              </div>
+              {sidebarCats.map(c=>{const n=burItems.filter(b=>b.catId===c.id).length; const sel=selCat===c.id; return(
                 <div key={c.id} style={{display:"flex",alignItems:"center",gap:2,marginBottom:2,borderRadius:8,background:sel?"#7c3aed":"transparent"}}>
                   <button onClick={()=>setSelCat(c.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,flex:1,minWidth:0,textAlign:"left",padding:"7px 10px",borderRadius:8,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",background:"transparent",color:sel?"#fff":"#475569"}}>
                     <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</span><span style={{opacity:.7,fontSize:10,flexShrink:0}}>{n}</span>
