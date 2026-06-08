@@ -40,15 +40,26 @@ const uid=()=>"_"+Math.random().toString(36).slice(2,10);
 const bTot=b=>{const d=(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0),oh=d*(+b.oh||0)/100,s=d+oh;return s*(1+(+b.profit||0)/100);};
 // Custom BOQ columns: compute each column's value per row. Formula columns can reference
 // qty, rateA, rateB, amtA, amtB, and earlier custom columns (by sanitised name).
-const sanitizeVar=l=>"c_"+String(l||"").replace(/[^a-zA-Z0-9]/g,"_");
+// Compute custom BOQ columns. Formulas may use natural names: Qty, Rate A, Rate B,
+// Amt A, Amt B, and any other column's name (spaces ok, case-insensitive).
 function computeCols(item,cols){
-  const vals={qty:+item.qty||0,rA:+item.rA||0,rB:+item.rB||0,rateA:+item.rA||0,rateB:+item.rB||0,amtA:(+item.qty||0)*(+item.rA||0),amtB:(+item.qty||0)*(+item.rB||0)};
+  const qty=+item.qty||0, rA=+item.rA||0, rB=+item.rB||0, amtA=qty*rA, amtB=qty*rB;
+  const map={}; const put=(n,v)=>{ if(n)map[String(n).trim().toLowerCase()]=v; };
+  put("qty",qty); put("quantity",qty);
+  put("rate a",rA); put("ratea",rA); put("rate",rA);
+  put("rate b",rB); put("rateb",rB);
+  put("amt a",amtA); put("amount a",amtA); put("amta",amtA); put("amt",amtA);
+  put("amt b",amtB); put("amount b",amtB); put("amtb",amtB);
+  const evalNamed=f=>{
+    let e=String(f).replace(/^\s*=/,"");
+    const names=Object.keys(map).sort((a,b)=>b.length-a.length);
+    for(const nm of names){ const pat=nm.replace(/[.*+?^${}()|[\]\\]/g,"\\$&").replace(/\s+/g,"\\s*"); e=e.replace(new RegExp(pat,"gi"),"("+(map[nm]||0)+")"); }
+    try{ const r=Function('"use strict";return ('+e+');')(); return (typeof r==="number"&&isFinite(r))?r:"ERR"; }catch{ return "ERR"; }
+  };
   const out={};
   for(const c of (cols||[])){
-    if(c.formula){
-      try{const f=new Function(...Object.keys(vals),`return (${c.formula});`);const r=f(...Object.values(vals));out[c.id]=r;vals[sanitizeVar(c.label)]=(typeof r==="number"&&isFinite(r))?r:(parseFloat(r)||0);}
-      catch{out[c.id]="ERR";vals[sanitizeVar(c.label)]=0;}
-    }else{const v=item.cx?.[c.id]??"";out[c.id]=v;vals[sanitizeVar(c.label)]=parseFloat(v)||0;}
+    if(c.formula){ const v=evalNamed(c.formula); out[c.id]=v; put(c.label,typeof v==="number"?v:0); }
+    else { const val=item.cx?.[c.id]??""; out[c.id]=val; put(c.label,parseFloat(val)||0); }
   }
   return out;
 }
@@ -161,7 +172,7 @@ export default function App(){
   const addCol=useCallback(()=>{
     if(!data)return;
     const label=prompt("New column name (e.g. 'Wastage Amt'):"); if(!label||!label.trim())return;
-    const formula=prompt("Optional formula — leave BLANK for a column you type into.\n\nYou can use: qty, rateA, rateB, amtA, amtB, and other column names.\nExample:  qty*rateA*1.1","");
+    const formula=prompt("Optional formula — leave BLANK for a column you type into.\n\nYou can use: Qty, Rate A, Rate B, Amt A, Amt B, and other column names (spaces ok).\nExamples:  Rate A * 0.25      Qty * markup","");
     const nd=JSON.parse(JSON.stringify(data)); nd.cols=[...(nd.cols||[]),{id:uid(),label:label.trim(),formula:(formula||"").trim()}];
     pushData(nd,`Added column "${label.trim()}"`);
   },[data,pushData]);
