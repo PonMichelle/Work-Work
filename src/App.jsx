@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { auth, db } from "./firebase";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
+// NOTE: BUR items are scoped per project via a `pid` field.
 import burSeed from "./burSeed.json"; // master BUR list imported from BUR.xlsx
 import SheetGrid from "./SheetGrid.jsx";
 
@@ -145,7 +146,15 @@ export default function App(){
     setProjects(list); setPid(p=>p||(list[0]?list[0].id:null));
   }); },[ready]);
 
-  useEffect(()=>{ if(!ready)return; return onSnapshot(collection(db,"bur"),snap=>setBurItems(snap.docs.map(d=>({id:d.id,...d.data()})))); },[ready]);
+  const migratedRef=useRef(false);
+  useEffect(()=>{ if(!ready||!pid)return; return onSnapshot(collection(db,"bur"),async snap=>{
+    const all=snap.docs.map(d=>({id:d.id,...d.data()}));
+    // Show this project's items (and any legacy items without a project) ...
+    setBurItems(all.filter(b=>b.pid===pid||!b.pid));
+    // ... then one-time adopt legacy (pid-less) items into the current project so they become project-scoped.
+    const legacy=all.filter(b=>!b.pid);
+    if(legacy.length&&!migratedRef.current){ migratedRef.current=true; try{ for(let i=0;i<legacy.length;i+=400){ const batch=writeBatch(db); legacy.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{pid})); await batch.commit(); } }catch{} }
+  }); },[ready,pid]);
 
   useEffect(()=>{ if(!ready)return; const ref=doc(db,"meta","codes"); return onSnapshot(ref,s=>{ if(s.exists())setCodes(s.data().list||[]); else{setCodes(DEF_CODES);setDoc(ref,{list:DEF_CODES}).catch(()=>{});} }); },[ready]);
   useEffect(()=>{ if(!ready)return; const ref=doc(db,"meta","cats"); return onSnapshot(ref,s=>{ if(s.exists())setCats(s.data().list||[]); else{setCats(DEF_CATS);setDoc(ref,{list:DEF_CATS}).catch(()=>{});} }); },[ready]);
@@ -163,9 +172,14 @@ export default function App(){
     const name=prompt("New project / tender name:"); if(!name||!name.trim())return;
     let sections=newSections(), cols=[];
     const cur=projects&&projects.find(p=>p.id===pid);
-    if(data&&cur&&confirm(`Copy the BOQ from "${cur.name}" into the new project?\n\nOK = duplicate its BOQ rows & columns (BUR library is shared automatically)\nCancel = start with a blank BOQ`)){ sections=JSON.parse(JSON.stringify(data.sections||newSections())); cols=JSON.parse(JSON.stringify(data.cols||[])); }
+    if(data&&cur&&confirm(`Copy the BOQ from "${cur.name}" into the new project?\n\nOK = duplicate its BOQ rows & columns\nCancel = start with a blank BOQ`)){ sections=JSON.parse(JSON.stringify(data.sections||newSections())); cols=JSON.parse(JSON.stringify(data.cols||[])); }
+    const copyBur = cur && burItems.length>0 && confirm(`Copy the BUR rate library (${burItems.length} items) from "${cur.name}" into the new project?\n\nOK = copy all rates as a starting point\nCancel = start with an EMPTY BUR (then use "Load master list" or "Paste from Excel" to bring in your own)`);
     const ref=doc(collection(db,"projects"));
-    try{ await setDoc(ref,{name:name.trim(),createdAt:Date.now(),sections,cols,ts:Date.now()}); setPid(ref.id); setTab("boq"); addLogEntry(`Created project "${name.trim()}"${sections[0]?.items?.length?" (copied)":""}`);}catch(e){toast_("⚠️ "+e.message);}
+    try{
+      await setDoc(ref,{name:name.trim(),createdAt:Date.now(),sections,cols,ts:Date.now()});
+      if(copyBur){ const src=burItems.slice(); for(let i=0;i<src.length;i+=400){ const batch=writeBatch(db); src.slice(i,i+400).forEach(b=>{ const {id,...rest}=b; batch.set(doc(collection(db,"bur")),{...rest,pid:ref.id}); }); await batch.commit(); } }
+      setPid(ref.id); setTab("boq"); addLogEntry(`Created project "${name.trim()}"${copyBur?" (BUR copied)":""}`);
+    }catch(e){toast_("⚠️ "+e.message);}
   };
   const renameProject=async()=>{ const cur=projects?.find(p=>p.id===pid); const name=prompt("Rename project:",cur?.name||""); if(!name||!name.trim())return; try{await updateDoc(doc(db,"projects",pid),{name:name.trim()});}catch(e){toast_("⚠️ "+e.message);} };
   const deleteProject=async()=>{ if(!pid)return; const cur=projects?.find(p=>p.id===pid); if(!confirm(`Delete project "${cur?.name}" and all its BOQ items? This cannot be undone.`))return; try{await deleteDoc(doc(db,"projects",pid)); setPid(null);}catch(e){toast_("⚠️ "+e.message);} };
@@ -268,7 +282,7 @@ export default function App(){
   },[burItems,toast_]);
 
   // ── BUR writes (per-document in shared library) ─────────────────────────────
-  const addBurItem=useCallback(async catId=>{ const ref=doc(collection(db,"bur")); try{ await setDoc(ref,{catId,code:"",desc:"New Item",unit:"sum",labour:0,material:0,plant:0,subcon:0,oh:15,profit:10,costData:[],quote:null,group:""}); setExpBur(ref.id);}catch(e){toast_("⚠️ "+e.message);} },[]);
+  const addBurItem=useCallback(async catId=>{ const ref=doc(collection(db,"bur")); try{ await setDoc(ref,{pid,catId,code:"",desc:"New Item",unit:"sum",labour:0,material:0,plant:0,subcon:0,oh:15,profit:10,costData:[],quote:null,group:""}); setExpBur(ref.id);}catch(e){toast_("⚠️ "+e.message);} },[pid]);
   const updBur=useCallback((id,ch)=>{ setBurItems(prev=>prev.map(b=>b.id===id?{...b,...ch}:b)); if(burTimers.current[id])clearTimeout(burTimers.current[id]); burTimers.current[id]=setTimeout(()=>updateDoc(doc(db,"bur",id),ch).catch(()=>{}),600); },[]);
   const delBur=useCallback(id=>{ if(confirm("Delete this BUR item?"))deleteDoc(doc(db,"bur",id)).catch(()=>{}); },[]);
   const setBurField=(id,patch)=>{ setBurItems(prev=>prev.map(b=>b.id===id?{...b,...patch}:b)); updateDoc(doc(db,"bur",id),patch).catch(()=>{}); };
@@ -281,13 +295,13 @@ export default function App(){
       for(let i=0;i<burItems.length;i+=400){ const batch=writeBatch(db); burItems.slice(i,i+400).forEach(b=>batch.delete(doc(db,"bur",b.id))); await batch.commit(); }
       // 2) set categories from the Excel (column A)
       await setDoc(doc(db,"meta","cats"),{list:burSeed.cats});
-      // 3) write the items
-      for(let i=0;i<burSeed.items.length;i+=400){ const batch=writeBatch(db); burSeed.items.slice(i,i+400).forEach(it=>{ const {id,...rest}=it; batch.set(doc(collection(db,"bur")),rest); }); await batch.commit(); }
+      // 3) write the items (scoped to this project)
+      for(let i=0;i<burSeed.items.length;i+=400){ const batch=writeBatch(db); burSeed.items.slice(i,i+400).forEach(it=>{ const {id,...rest}=it; batch.set(doc(collection(db,"bur")),{...rest,pid}); }); await batch.commit(); }
       if(burSeed.cats[0])setSelCat(burSeed.cats[0].id);
       addLogEntry(`Loaded master list: ${burSeed.items.length} items in ${burSeed.cats.length} categories`);
       toast_(`✅ Loaded ${burSeed.items.length} items into ${burSeed.cats.length} categories`);
     }catch(e){ toast_("⚠️ Load failed: "+e.message); }
-  },[burItems,toast_,addLogEntry]);
+  },[burItems,toast_,addLogEntry,pid]);
 
   // Auto-sort BUR items into the standard categories by keyword; unmatched → Others. User can move any item after.
   const categorizeMaster=useCallback(async()=>{
@@ -313,10 +327,10 @@ export default function App(){
     const first=lines[0].split("\t").map(s=>s.trim().toLowerCase());
     const start=(first[0]==="description"||first.includes("code"))?1:0;
     const rows=[];
-    for(let i=start;i<lines.length;i++){ const c=lines[i].split("\t"); const desc=(c[0]||"").trim(),unit=(c[1]||"").trim(),code=(c[2]||"").trim(); const rate=parseFloat(String(c[3]||"").replace(/[^0-9.\-]/g,""))||0; if(!desc&&!code)continue; rows.push({catId:pasteCat,code,desc:desc||"(no description)",unit:unit||"sum",labour:0,material:rate,plant:0,subcon:0,oh:0,profit:0,costData:[],quote:null,group:"Pasted"}); }
+    for(let i=start;i<lines.length;i++){ const c=lines[i].split("\t"); const desc=(c[0]||"").trim(),unit=(c[1]||"").trim(),code=(c[2]||"").trim(); const rate=parseFloat(String(c[3]||"").replace(/[^0-9.\-]/g,""))||0; if(!desc&&!code)continue; rows.push({pid,catId:pasteCat,code,desc:desc||"(no description)",unit:unit||"sum",labour:0,material:rate,plant:0,subcon:0,oh:0,profit:0,costData:[],quote:null,group:"Pasted"}); }
     if(!rows.length){toast_("⚠️ No rows parsed — expected: Description, Unit, Code, Rate");return;}
     try{ let batch=writeBatch(db),n=0; for(const r of rows){ batch.set(doc(collection(db,"bur")),r); n++; if(n%400===0){await batch.commit();batch=writeBatch(db);} } await batch.commit(); setPasteOpen(false);setPasteText("");setSelCat(pasteCat); toast_(`✅ Imported ${rows.length} items`);}catch(e){toast_("⚠️ "+e.message);}
-  },[pasteText,pasteCat,toast_]);
+  },[pasteText,pasteCat,toast_,pid]);
 
   // ── Cost data / quotes ──────────────────────────────────────────────────────
   const modalItem=costModal?burItems.find(b=>b.id===costModal):null;
