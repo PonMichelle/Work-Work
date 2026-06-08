@@ -97,6 +97,7 @@ export default function App(){
   const [burSearch,setBurSearch]=useState("");
   const [sortBy,setSortBy]=useState("code"); const [sortDir,setSortDir]=useState(1);
   const [burView,setBurView]=useState("tabs"); const [catSort,setCatSort]=useState("none");
+  const [selBur,setSelBur]=useState(()=>new Set());
   const [burColW,setBurColW]=useState(()=>{try{return JSON.parse(localStorage.getItem("burColW")||"{}")}catch{return{}}});
   const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("");
   const [costModal,setCostModal]=useState(null);
@@ -474,6 +475,12 @@ export default function App(){
   const toggleSort=f=>{ if(sortBy===f)setSortDir(d=>-d); else{setSortBy(f);setSortDir(1);} };
   const renameCat=cid=>{ const c=cats.find(x=>x.id===cid); if(!c)return; const nm=prompt("Rename category:",c.name); if(nm&&nm.trim())pushCats(cats.map(x=>x.id===cid?{...x,name:nm.trim()}:x)); };
   const delCat=cid=>{ const n=burItems.filter(b=>b.catId===cid).length; if(n>0){alert(`This category has ${n} item(s). Move them to another category first (open an item → CATEGORY), then delete.`);return;} if(confirm("Delete this empty category?")){ pushCats(cats.filter(x=>x.id!==cid)); if(selCat===cid){const o=cats.find(x=>x.id!==cid); setSelCat(o?o.id:"");} } };
+  const toggleSel=id=>setSelBur(prev=>{const s=new Set(prev); s.has(id)?s.delete(id):s.add(id); return s;});
+  const clearSel=()=>setSelBur(new Set());
+  const moveItemsToCat=async(ids,cid)=>{ if(!ids.length||!cid)return; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{catId:cid})); await batch.commit();} };
+  const bulkMoveCat=async cid=>{ const ids=[...selBur]; if(!ids.length||!cid)return; await moveItemsToCat(ids,cid); toast_(`✅ Moved ${ids.length} item(s)`); clearSel(); };
+  const bulkSetUnit=async u=>{ const ids=[...selBur]; if(!ids.length||!u)return; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{unit:u})); await batch.commit();} toast_(`✅ Set unit on ${ids.length} item(s)`); clearSel(); };
+  const handleDropCat=(cid,e)=>{ e.preventDefault(); const id=e.dataTransfer.getData("text/bur"); if(!id)return; const ids=(selBur.has(id)&&selBur.size>1)?[...selBur]:[id]; moveItemsToCat(ids,cid).then(()=>{toast_(`✅ Moved ${ids.length} item(s)`);clearSel();}); };
   const _codeCount={}; burItems.forEach(b=>{const k=(b.code||"").trim().toLowerCase(); if(k)_codeCount[k]=(_codeCount[k]||0)+1;});
   const isDupCode=code=>{const k=(code||"").trim().toLowerCase(); return !!k&&_codeCount[k]>1;};
   const dupCount=Object.values(_codeCount).filter(n=>n>1).length;
@@ -484,19 +491,21 @@ export default function App(){
   const burTableEl=items=>(
     <div style={{background:"#fff",borderRadius:8,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"auto"}}>
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,tableLayout:"fixed"}}>
-        <colgroup><col style={{width:26}}/>{burHead.map(([k])=><col key={k} style={{width:burCw(k)}}/>)}<col style={{width:34}}/></colgroup>
+        <colgroup><col style={{width:28}}/><col style={{width:24}}/>{burHead.map(([k])=><col key={k} style={{width:burCw(k)}}/>)}<col style={{width:34}}/></colgroup>
         <thead><tr style={{background:"#fef9c3",color:"#92400e",fontSize:11}}>
+          <th style={{borderBottom:"1px solid #fde68a",textAlign:"center"}}><input type="checkbox" title="Select all shown" checked={items.length>0&&items.every(it=>selBur.has(it.id))} onChange={e=>{setSelBur(prev=>{const s=new Set(prev); items.forEach(it=>e.target.checked?s.add(it.id):s.delete(it.id)); return s;});}} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></th>
           <th style={{borderBottom:"1px solid #fde68a"}}></th>
           {burHead.map(([k,l,al])=><th key={k} style={{padding:"8px 8px",textAlign:al,fontWeight:700,borderBottom:"1px solid #fde68a",whiteSpace:"nowrap",position:"relative",overflow:"hidden"}}>{l}<div onMouseDown={e=>startBurDrag(k,e)} title="Drag to resize" style={{position:"absolute",top:0,right:0,width:8,height:"100%",cursor:"col-resize"}}/></th>)}
           <th style={{borderBottom:"1px solid #fde68a"}}></th>
         </tr></thead>
         <tbody>
           {items.map((item,ri)=>{
-            const isExp=expBur===item.id; const total=bTot(item); const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0); const cdCount=(item.costData||[]).length; const dup=isDupCode(item.code);
+            const isExp=expBur===item.id; const total=bTot(item); const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0); const cdCount=(item.costData||[]).length; const dup=isDupCode(item.code); const checked=selBur.has(item.id);
             const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2}; const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
             return(<Fragment key={item.id}>
-              <tr style={{borderBottom:"1px solid #f8fafc",background:ri%2===1?"#f5f3ff":"#fff"}}>
-                <td style={{padding:"2px 4px",textAlign:"center",cursor:"pointer",color:isExp?"#2563eb":"#cbd5e1"}} onClick={()=>setExpBur(isExp?null:item.id)}>{isExp?"▼":"▶"}</td>
+              <tr draggable onDragStart={e=>{e.dataTransfer.setData("text/bur",item.id);e.dataTransfer.effectAllowed="move";}} style={{borderBottom:"1px solid #f8fafc",background:checked?"#ede9fe":(ri%2===1?"#f5f3ff":"#fff")}}>
+                <td style={{padding:"2px 4px",textAlign:"center"}}><input type="checkbox" checked={checked} onChange={()=>toggleSel(item.id)} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
+                <td title="Drag to a category" style={{padding:"2px 4px",textAlign:"center",cursor:"grab",color:isExp?"#2563eb":"#cbd5e1"}} onClick={()=>setExpBur(isExp?null:item.id)}>{isExp?"▼":"▶"}</td>
                 <td style={{padding:"3px 6px",overflow:"hidden"}}><input style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></td>
                 <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent",width:"100%"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
                 <td style={{padding:"3px 6px",overflow:"hidden",background:dup?"#fee2e2":undefined}}><input title={dup?"⚠️ Duplicate BUR code":""} style={{width:"100%",border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:dup?"#b91c1c":"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})}/></td>
@@ -507,7 +516,7 @@ export default function App(){
                 <td style={{padding:"3px 6px",textAlign:"center"}}><button onClick={()=>{setCostModal(item.id);setCType("subcon");}} style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#92400e",fontWeight:600,whiteSpace:"nowrap"}}>📊{cdCount?` ${cdCount}`:""}</button></td>
                 <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>delBur(item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></td>
               </tr>
-              {isExp&&(<tr><td colSpan={10} style={{background:"#fafafa",padding:"12px 16px",borderBottom:"1px solid #eef2f7"}}>
+              {isExp&&(<tr><td colSpan={11} style={{background:"#fafafa",padding:"12px 16px",borderBottom:"1px solid #eef2f7"}}>
                 <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:12}}>
                   <div style={{flex:"2 1 320px"}}><label style={lbl}>DESCRIPTION (full)</label><textarea value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:6,padding:"7px 10px",fontSize:13,outline:"none",minHeight:64,resize:"vertical",boxSizing:"border-box",lineHeight:1.4}}/></div>
                   <div style={{flex:"1 1 180px"}}><label style={lbl}>BUR CODE</label><input value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:6,padding:"7px 10px",fontSize:13,outline:"none",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8",boxSizing:"border-box"}}/></div>
@@ -695,7 +704,7 @@ export default function App(){
                 </div>
               </div>
               {sidebarCats.map(c=>{const n=burItems.filter(b=>b.catId===c.id).length; const sel=selCat===c.id; return(
-                <div key={c.id} style={{display:"flex",alignItems:"center",gap:2,marginBottom:2,borderRadius:8,background:sel?"#7c3aed":"transparent"}}>
+                <div key={c.id} onDragOver={e=>{e.preventDefault();e.currentTarget.style.outline="2px dashed #7c3aed";}} onDragLeave={e=>{e.currentTarget.style.outline="none";}} onDrop={e=>{e.currentTarget.style.outline="none";handleDropCat(c.id,e);}} style={{display:"flex",alignItems:"center",gap:2,marginBottom:2,borderRadius:8,background:sel?"#7c3aed":"transparent"}}>
                   <button onClick={()=>setSelCat(c.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,flex:1,minWidth:0,textAlign:"left",padding:"7px 10px",borderRadius:8,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",background:"transparent",color:sel?"#fff":"#475569"}}>
                     <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</span><span style={{opacity:.7,fontSize:10,flexShrink:0}}>{n}</span>
                   </button>
@@ -727,6 +736,14 @@ export default function App(){
                 <span style={{marginLeft:8,color:"#cbd5e1"}}>· drag column edges to resize</span>
               </div>
 
+              {selBur.size>0&&<div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8,background:"#ede9fe",border:"1px solid #c4b5fd",borderRadius:8,padding:"6px 10px",flexWrap:"wrap"}}>
+                <b style={{fontSize:12,color:"#5b21b6"}}>{selBur.size} selected</b>
+                <span style={{fontSize:11,color:"#475569"}}>Move to:</span>
+                <select value="" onChange={e=>{if(e.target.value)bulkMoveCat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Category…</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+                <span style={{fontSize:11,color:"#475569"}}>Set unit:</span>
+                <select value="" onChange={e=>{if(e.target.value)bulkSetUnit(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Unit…</option>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                <button onClick={clearSel} style={{marginLeft:"auto",background:"#fff",border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#5b21b6",fontWeight:600}}>Clear</button>
+              </div>}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
                 <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{_q?"🔎 Search results (all categories)":catName(selCat)} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catTotal} items{catItems.length<catTotal?` (showing first ${catItems.length} — refine search)`:""}</span>{dupCount>0&&<span style={{marginLeft:8,background:"#fee2e2",color:"#b91c1c",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>⚠️ {dupCount} duplicate code{dupCount>1?"s":""}</span>}</span>
                 <button onClick={()=>addBurItem(selCat)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Item</button>
