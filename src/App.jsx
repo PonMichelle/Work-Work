@@ -442,7 +442,7 @@ export default function App(){
   const BUR_MAX=200; const _q=burSearch.trim().toLowerCase();
   // When searching, look across the WHOLE BUR library; otherwise show the selected category.
   const _base=_q?burItems:burItems.filter(b=>b.catId===selCat);
-  const _filtered=_q?_base.filter(b=>(b.code||"").toLowerCase().includes(_q)||(b.desc||"").toLowerCase().includes(_q)):_base;
+  const _filtered=_q?_base.filter(b=>(b.code||"").toLowerCase().includes(_q)||(b.desc||"").toLowerCase().includes(_q)||(b.costData||[]).some(e=>(e.supplier||"").toLowerCase().includes(_q)||(e.note||"").toLowerCase().includes(_q))):_base;
   const _sorted=[..._filtered].sort((a,b)=>{
     let av,bv;
     if(sortBy==="rate"){av=bTot(a);bv=bTot(b);return (av-bv)*sortDir;}
@@ -674,7 +674,7 @@ export default function App(){
             {/* Right content */}
             <div style={{flex:1,minWidth:0}}>
               <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
-                <input value={burSearch} onChange={e=>setBurSearch(e.target.value)} placeholder="🔍 Search code or description…" style={{flex:1,minWidth:180,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none"}}/>
+                <input value={burSearch} onChange={e=>setBurSearch(e.target.value)} placeholder="🔍 Search code, description, or cost-data supplier/note…" style={{flex:1,minWidth:180,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none"}}/>
                 {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
                 <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
                 <button onClick={exportBUR} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⤓ Export Excel</button>
