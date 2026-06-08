@@ -3,6 +3,7 @@ import { auth, db } from "./firebase";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
 import burSeed from "./burSeed.json"; // master BUR list imported from BUR.xlsx
+import SheetGrid from "./SheetGrid.jsx";
 
 const SECTIONS=[{id:"prelim",name:"Preliminaries"},{id:"building",name:"Building Works"},{id:"external",name:"External Works"},{id:"mande",name:"M&E Works"},{id:"fees",name:"Professional Fees"}];
 const UNITS=["m²","m³","m","nr","sum","lot","kg","t","m run","%","item"];
@@ -408,8 +409,9 @@ export default function App(){
 
       <div style={{flex:1,overflow:"auto",padding:12}}>
 
-        {/* ══ BOQ ══ */}
-        {tab==="boq"&&(
+        {/* ══ BOQ (Excel grid) ══ */}
+        {tab==="boq"&&<SheetGrid db={db} pid={pid} toast={toast_} baseUrl={import.meta.env.BASE_URL}/>}
+        {false&&(
           <div>
             <div style={{display:"flex",gap:8,marginBottom:12,overflowX:"auto",paddingBottom:4}}>
               {data.sections.map(sec=><button key={sec.id} onClick={()=>setSelSec(sec.id)} style={{padding:"6px 14px",borderRadius:20,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,background:selSec===sec.id?"#2563eb":"#fff",color:selSec===sec.id?"#fff":"#475569",boxShadow:"0 1px 4px rgba(0,0,0,.1)"}}>{sec.name}<span style={{opacity:.7,fontSize:11,marginLeft:4}}>({sec.items?.length||0})</span></button>)}
