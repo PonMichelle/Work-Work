@@ -98,6 +98,7 @@ export default function App(){
   const [sortBy,setSortBy]=useState("code"); const [sortDir,setSortDir]=useState(1);
   const [burView,setBurView]=useState("tabs"); const [catSort,setCatSort]=useState("none");
   const [selBur,setSelBur]=useState(()=>new Set());
+  const [boqMode,setBoqMode]=useState("structured");
   const [burColW,setBurColW]=useState(()=>{try{return JSON.parse(localStorage.getItem("burColW")||"{}")}catch{return{}}});
   const [pasteOpen,setPasteOpen]=useState(false); const [pasteText,setPasteText]=useState(""); const [pasteCat,setPasteCat]=useState("");
   const [costModal,setCostModal]=useState(null);
@@ -619,7 +620,12 @@ export default function App(){
             </div>
           </div>
         )}
-        {tab==="boq"&&(
+        {tab==="boq"&&<div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center",flexWrap:"wrap"}}>
+          <span style={{fontSize:11,fontWeight:700,color:"#64748b"}}>BOQ mode:</span>
+          {[["structured","📋 Structured (code→rate)"],["sheet","📄 Excel grid (drag your file)"]].map(([m,l])=><button key={m} onClick={()=>setBoqMode(m)} style={{border:"1px solid #e2e8f0",background:boqMode===m?"#7c3aed":"#fff",color:boqMode===m?"#fff":"#475569",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontWeight:600}}>{l}</button>)}
+        </div>}
+        {tab==="boq"&&boqMode==="sheet"&&<SheetGrid db={db} pid={pid} toast={toast_} baseUrl={import.meta.env.BASE_URL} burLookup={code=>{const b=burItems.find(x=>(x.code||"").trim().toLowerCase()===String(code).trim().toLowerCase()); return b?{material:+b.material||0,labour:+b.labour||0,total:+bTot(b)||0}:null;}}/>}
+        {tab==="boq"&&boqMode==="structured"&&(
           <div>
             <div style={{display:"flex",gap:8,marginBottom:12,overflowX:"auto",paddingBottom:4}}>
               {data.sections.map(sec=><button key={sec.id} onClick={()=>setSelSec(sec.id)} style={{padding:"6px 14px",borderRadius:20,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,background:selSec===sec.id?"#2563eb":"#fff",color:selSec===sec.id?"#fff":"#475569",boxShadow:"0 1px 4px rgba(0,0,0,.1)"}}>{sec.name}<span style={{opacity:.7,fontSize:11,marginLeft:4}}>({sec.items?.length||0})</span></button>)}
