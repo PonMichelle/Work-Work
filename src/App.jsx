@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { auth, db } from "./firebase";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch, getDoc } from "firebase/firestore";
 // NOTE: BUR items are scoped per project via a `pid` field.
 import burSeed from "./burSeed.json"; // master BUR list imported from BUR.xlsx
 import SheetGrid from "./SheetGrid.jsx";
@@ -268,6 +268,34 @@ export default function App(){
 
   // Export the BOQ (with computed custom columns) to a CSV that opens in Excel.
   const exportBOQ=useCallback(()=>{ if(!data)return; const cols=data.cols||[]; const esc=v=>{const s=String(v??"");return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}; const head=["Section","Ref","Description","Unit","Qty","Rate A","Amt A","Rate B","Amt B","Code","Remarks","By",...cols.map(c=>c.label)]; const rows=[]; data.sections.forEach(sec=>(sec.items||[]).forEach(it=>{const cxv=computeCols(it,cols);rows.push([sec.name,it.ref,it.desc,it.unit,it.qty,it.rA,(it.qty||0)*(it.rA||0),it.rB,(it.qty||0)*(it.rB||0),it.code,it.remarks,it.by,...cols.map(c=>cxv[c.id])]);})); const csv="﻿"+[head,...rows].map(r=>r.map(esc).join(",")).join("\r\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BOQ_export.csv"; a.click(); URL.revokeObjectURL(url); toast_(`✅ Exported ${rows.length} BOQ rows to Excel (CSV)`); },[data,toast_]);
+  // Read the dropped Excel-grid file and import its rows into the structured BOQ sections (by sheet name).
+  const importGridToStructured=useCallback(async()=>{
+    try{
+      if(!data){toast_("Open a project first");return;}
+      const snap=await getDoc(doc(db,"boqfile",pid));
+      if(!snap.exists()||!snap.data().b64){toast_("⚠️ No Excel-grid file yet — switch to 'Excel grid' mode and drag your file in first");return;}
+      if(!confirm("Import the Excel-grid rows into the Structured BOQ?\n\nThis REPLACES the current structured BOQ items with the items found in your dropped file (matched to sections by sheet name)."))return;
+      toast_("⏳ Importing grid → structured…");
+      const ExcelJS=(await import("exceljs")).default; const wb=new ExcelJS.Workbook();
+      await wb.xlsx.load(Uint8Array.from(atob(snap.data().b64),c=>c.charCodeAt(0)));
+      const toStr=v=>{ if(v==null)return ""; if(typeof v==="object"){ if(v.richText)return v.richText.map(t=>t.text).join(""); if(v.text!=null)return String(v.text); if(v.result!=null)return String(v.result); return ""; } return String(v); };
+      const num=s=>parseFloat(String(s).replace(/[^0-9.\-]/g,""))||0;
+      const sectionFor=name=>{const n=(name||"").toLowerCase(); if(n.includes("prelim"))return"prelim"; if(n.includes("professional")||n.includes("fee"))return"fees"; if(n.includes("building"))return"building"; if(n.includes("external"))return"external"; if(n.includes("m&e")||n.includes("m & e")||n.includes("mech")||n.includes("elec")||n.includes("m and e"))return"mande"; return null;};
+      const nd=JSON.parse(JSON.stringify(data)); nd.sections.forEach(s=>{s.items=[];});
+      let added=0;
+      wb.eachSheet(ws=>{
+        const sec=sectionFor(ws.name); if(!sec)return; const target=nd.sections.find(s=>s.id===sec); if(!target)return;
+        let hr=0,cCode=0,cDesc=0,cUnit=0,cRate=0,cQty=0;
+        for(let r=1;r<=Math.min(14,ws.rowCount);r++){ let f=false; ws.getRow(r).eachCell({includeEmpty:false},(cell,col)=>{const t=toStr(cell.value).trim().toUpperCase(); if(t==="CODE"){cCode=col;f=true;} if(t==="DESCRIPTION")cDesc=col; if(t==="UNIT")cUnit=col; if(t==="U/RATE"||t==="RATE")cRate=col; if(t==="QTY")cQty=col;}); if(f&&cDesc){hr=r;break;} }
+        if(!hr||!cDesc||!cUnit)return;
+        for(let r=hr+1;r<=ws.rowCount;r++){ const row=ws.getRow(r); const unit=toStr(row.getCell(cUnit).value).trim(); if(!unit)continue; const desc=toStr(row.getCell(cDesc).value).trim(); if(!desc)continue;
+          target.items.push({id:uid(),ref:"",desc,unit,qty:cQty?(num(toStr(row.getCell(cQty).value))||1):1,rA:cRate?num(toStr(row.getCell(cRate).value)):0,rB:0,code:cCode?toStr(row.getCell(cCode).value).trim():"",status:"Draft",remarks:"",by:uRef.current?.name}); added++;
+        }
+      });
+      pushData(nd,`Imported ${added} BOQ items from Excel grid`); setBoqMode("structured");
+      toast_(`✅ Imported ${added} items into structured BOQ`);
+    }catch(e){ toast_("⚠️ Import failed: "+(e&&e.message||e)); }
+  },[data,pid,pushData,toast_]);
 
   // Build the BUR export from LIVE data, grouped by category, formatted like the master build-up sheet.
   const exportBUR=useCallback(async()=>{
@@ -624,7 +652,7 @@ export default function App(){
           <span style={{fontSize:11,fontWeight:700,color:"#64748b"}}>BOQ mode:</span>
           {[["structured","📋 Structured (code→rate)"],["sheet","📄 Excel grid (drag your file)"]].map(([m,l])=><button key={m} onClick={()=>setBoqMode(m)} style={{border:"1px solid #e2e8f0",background:boqMode===m?"#7c3aed":"#fff",color:boqMode===m?"#fff":"#475569",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontWeight:600}}>{l}</button>)}
         </div>}
-        {tab==="boq"&&boqMode==="sheet"&&<SheetGrid db={db} pid={pid} toast={toast_} baseUrl={import.meta.env.BASE_URL} burLookup={code=>{const b=burItems.find(x=>(x.code||"").trim().toLowerCase()===String(code).trim().toLowerCase()); return b?{material:+b.material||0,labour:+b.labour||0,total:+bTot(b)||0}:null;}}/>}
+        {tab==="boq"&&boqMode==="sheet"&&<SheetGrid db={db} pid={pid} toast={toast_} baseUrl={import.meta.env.BASE_URL} onToStructured={importGridToStructured} burLookup={code=>{const b=burItems.find(x=>(x.code||"").trim().toLowerCase()===String(code).trim().toLowerCase()); return b?{material:+b.material||0,labour:+b.labour||0,total:+bTot(b)||0}:null;}}/>}
         {tab==="boq"&&boqMode==="structured"&&(
           <div>
             <div style={{display:"flex",gap:8,marginBottom:12,overflowX:"auto",paddingBottom:4}}>

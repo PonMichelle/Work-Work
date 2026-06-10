@@ -25,7 +25,7 @@ function evalFormula(expr,getVal,depth){
 }
 const fmtNum=r=>{ if(typeof r!=="number")return String(r); if(!isFinite(r))return "#ERR"; return Number.isInteger(r)?String(r):String(Math.round(r*100)/100); };
 
-export default function SheetGrid({ db, pid, toast, baseUrl, burLookup }){
+export default function SheetGrid({ db, pid, toast, baseUrl, burLookup, onToStructured }){
   const [b64,setB64]=useState(null); const [fileName,setFileName]=useState("");
   const [edits,setEdits]=useState({cells:{},colW:{},rowH:{},active:0});
   const [grid,setGrid]=useState(null); const [sheets,setSheets]=useState([]);
@@ -136,6 +136,7 @@ export default function SheetGrid({ db, pid, toast, baseUrl, burLookup }){
         {busy&&<span style={{fontSize:12,color:"#2563eb"}}>working…</span>}
         {grid&&grid.meta&&<span style={{fontSize:11,color:"#15803d",background:"#dcfce7",borderRadius:6,padding:"2px 8px"}}>🔗 BUR code link active (col {colLetter(grid.meta.cCode)})</span>}
         <div style={{marginLeft:"auto",display:"flex",gap:8,flexWrap:"wrap"}}>
+          {onToStructured&&<button onClick={onToStructured} title="Import these rows into the structured BOQ (code→rate)" style={{background:"#7c3aed",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>⤵ To structured (code→rate)</button>}
           <button onClick={exportXlsx} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>⤓ Export Excel</button>
           <label style={{background:"#2563eb",color:"#fff",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer"}}>Replace file<input type="file" accept=".xlsx" style={{display:"none"}} onChange={e=>onFile(e.target.files[0])}/></label>
         </div>
