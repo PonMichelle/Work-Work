@@ -79,6 +79,34 @@ const unitTag=u=>String(u||"").trim().replace(/²/g,"2").replace(/³/g,"3").repl
 const codeBase=(code,unit)=>{ const c=String(code||"").trim(), t=unitTag(unit); return t&&c.toLowerCase().endsWith("_"+t.toLowerCase())?c.slice(0,-(t.length+1)):c; };
 const codeWithUnit=(code,unit)=>{ const c=String(code||"").trim(), t=unitTag(unit); if(!c||!t)return c; return c.toLowerCase().endsWith("_"+t.toLowerCase())?c:`${c}_${t}`; };
 const swapUnitTag=(code,oldU,newU)=>String(code||"").trim()?codeWithUnit(codeBase(code,oldU),newU):code;
+// Read a master BUR workbook (layout of BUR.xlsx): orange cells in column A start a category (a plain column-A heading also
+// starts one when it matches an existing category name); every row with a Code in D is an item: B desc, C unit, D code, E rate.
+// Supplier names sit in R onwards on heading rows (e.g. "AID\n(SLA Sep 26)"); numbers under them on item rows become quotes.
+const parseBurWorkbook=(wb,catNames=[])=>{
+  const ws=wb.worksheets[0]; const known=new Set(catNames.map(n=>String(n).trim().toLowerCase()));
+  const val=c=>{ const v=c.value; if(v&&typeof v==="object"){ if("result" in v)return v.result; if(v.richText)return v.richText.map(t=>t.text).join(""); if(v.text!=null)return v.text; return undefined; } return v; };
+  const str=c=>{ const v=val(c); return v==null?"":String(v).trim(); };
+  const SUP0=18, SUPN=28; let cat="(Uncategorised)", hdr={}; const items=[];
+  const DATE_TAG=/\((SLA|PS|CAG|WAS|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i;
+  for(let r=1;r<=ws.rowCount;r++){
+    const A=str(ws.getCell(r,1)),B=str(ws.getCell(r,2)),D=str(ws.getCell(r,4));
+    if(r<6&&/^description$/i.test(A))continue;
+    const orange=(ws.getCell(r,1).fill?.fgColor?.argb||"").toUpperCase()==="FFFFC000";
+    if(!D&&A&&(orange||(!B&&known.has(A.toLowerCase())))){ cat=A; hdr={}; }
+    if(!D){
+      // supplier-name row: a category row, 2+ names, or a single pale-yellow / date-tagged name. Lone notes (sizes, remarks) are ignored.
+      const texts=[]; for(let c=SUP0;c<=SUPN;c++){ const cell=ws.getCell(r,c), v=val(cell); if(typeof v==="string"&&v.trim())texts.push({c,v:v.trim(),yellow:(cell.fill?.fgColor?.argb||"").toUpperCase()==="FFFFFFCC"}); }
+      const isHdr=cat===A||texts.length>=2||texts.some(t=>t.yellow||DATE_TAG.test(t.v));
+      if(isHdr) texts.forEach(t=>{ const one=t.v.replace(/\s*\r?\n\s*/g," "); const m=/^(.*?)\s*\(([^)]*)\)?\s*$/.exec(one); hdr[t.c]=m&&m[1]?{supplier:m[1].trim(),date:m[2].trim()}:{supplier:one,date:""}; });
+      continue;
+    }
+    const num=c=>{ const v=val(ws.getCell(r,c)); return typeof v==="number"&&isFinite(v)?v:null; };
+    const rate=num(5)??num(6)??0;
+    const quotes=[]; for(let c=SUP0;c<=SUPN;c++){ const q=num(c); if(q!=null&&q!==0&&hdr[c])quotes.push({supplier:hdr[c].supplier,date:hdr[c].date,rate:Math.round(q*100)/100}); }
+    items.push({cat,code:D,desc:B||D,unit:str(ws.getCell(r,3))||"sum",rate:Math.round(rate*100)/100,quotes});
+  }
+  return items;
+};
 const findBurByCode=(items,code)=>{ const k=String(code||"").trim().toLowerCase(); if(!k)return undefined; const lc=s=>String(s||"").trim().toLowerCase();
   return items.find(b=>lc(b.code)===k)||items.find(b=>b.code&&(lc(codeBase(b.code,b.unit))===k||lc(codeWithUnit(b.code,b.unit))===k)); };
 const bTot=b=>{const d=(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0),oh=d*(+b.oh||0)/100,s=d+oh;return s*(1+(+b.profit||0)/100);};
@@ -435,10 +463,11 @@ export default function App(){
       const orderedCats=catSort==="none"?cats:[...cats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
       for(const cat of orderedCats){ known.add(cat.id); const items=burItems.filter(b=>b.catId===cat.id).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(items.length)groups.push({name:cat.name,items}); }
       const orphan=burItems.filter(b=>!known.has(b.catId)).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(orphan.length)groups.push({name:"(Uncategorised)",items:orphan});
-      // per category: one column per supplier (case-insensitive); when an item has several entries from one supplier, the latest dated one is shown
+      // per category: one column per supplier + quote date (case-insensitive), e.g. "Kiong Gay (Jan 24)" and "Kiong Gay (SLA Sep 26)" are separate columns
+      const supKey=e=>(String(e.supplier||"").trim()+"|"+String(e.date||"").trim()).toLowerCase();
       let maxSup=0;
       groups.forEach(g=>{ const sups=[]; const idx={};
-        g.items.forEach(it=>(it.costData||[]).forEach(e=>{ const nm=String(e.supplier||"").trim(); if(!nm)return; const k=nm.toLowerCase(); if(!(k in idx)){idx[k]=sups.length;sups.push({name:nm,dates:new Set()});} if(e.date)sups[idx[k]].dates.add(e.date); }));
+        g.items.forEach(it=>(it.costData||[]).forEach(e=>{ const nm=String(e.supplier||"").trim(); if(!nm)return; const k=supKey(e); if(!(k in idx)){idx[k]=sups.length;sups.push({name:nm,dates:new Set()});} if(e.date)sups[idx[k]].dates.add(e.date); }));
         g.sups=sups; g.supIdx=idx; maxSup=Math.max(maxSup,sups.length); });
       const photoCol=SUP0+Math.max(maxSup,4)+1;
       // column widths copied from the master sheet
@@ -459,7 +488,7 @@ export default function App(){
         for(const it of g.items){
           const row=ws.getRow(r);
           const lab=+it.labour||0,mat=+it.material||0,pl=+it.plant||0,sub=+it.subcon||0,oh=+it.oh||0,pr=+it.profit||0;
-          const latest={}; (it.costData||[]).forEach(e=>{ const k=String(e.supplier||"").trim().toLowerCase(); if(!k||!(k in g.supIdx))return; const p=latest[k]; if(!p||String(e.date||"")>=String(p.date||""))latest[k]=e; });
+          const latest={}; (it.costData||[]).forEach(e=>{ const k=supKey(e); if(!String(e.supplier||"").trim()||!(k in g.supIdx))return; latest[k]=e; });
           // A supplier whose rate equals one of the item's cost figures is the "selected" quote: that cost cell links to it (=+R9) and it turns blue; others stay pink.
           // Prefer a quote filed under the same component, else any supplier with that exact rate.
           const sel={}; const used=new Set();
@@ -658,6 +687,36 @@ export default function App(){
   const clearSel=()=>setSelBur(new Set());
   const moveItemsToCat=async(ids,cid)=>{ if(!ids.length||!cid)return; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{catId:cid})); await batch.commit();} };
   const bulkMoveCat=async cid=>{ const ids=[...selBur]; if(!ids.length||!cid)return; await moveItemsToCat(ids,cid); toast_(`✅ Moved ${ids.length} item(s)`); clearSel(); };
+  // Replace this project's whole BUR library with the items in a master BUR workbook (layout of BUR.xlsx).
+  // Downloads a JSON backup of the current items first, and only deletes after the user confirms the counts.
+  const replaceBurFromExcel=async file=>{
+    if(!file||!pid)return; if(!/\.xlsx$/i.test(file.name)){toast_("⚠️ Use a .xlsx file");return;}
+    try{
+      toast_("⏳ Reading "+file.name+"…");
+      const ExcelJS=(await import("exceljs")).default; const wb=new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
+      const parsed=parseBurWorkbook(wb,cats.map(c=>c.name));
+      if(!parsed.length){toast_("⚠️ No items with a Code (column D) found in "+file.name);return;}
+      const catNames=[...new Set(parsed.map(p=>p.cat))];
+      const byName=new Map(cats.map(c=>[String(c.name).trim().toLowerCase(),c]));
+      const newCats=catNames.filter(n=>!byName.has(n.toLowerCase()));
+      const old=burItemsRef.current.filter(b=>b.pid===pid||!b.pid);
+      if(!confirm(`Replace the BUR library for this project?\n\n• DELETE all ${old.length} current BUR items (incl. their cost data & photos)\n• ADD ${parsed.length} items from ${file.name} in ${catNames.length} categories${newCats.length?` (${newCats.length} new: ${newCats.join(", ")})`:""}\n\nA backup of the current items will download first. This cannot be undone in the app.`))return;
+      // 1) backup
+      const bk=new Blob([JSON.stringify({exported:new Date().toISOString(),pid,cats,items:old},null,1)],{type:"application/json"});
+      const a=document.createElement("a"); a.href=URL.createObjectURL(bk); a.download=`BUR_backup_${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(a.href);
+      // 2) categories: reuse by name, add the missing ones
+      let catList=cats; if(newCats.length){ catList=[...cats,...newCats.map(n=>({id:"c"+uid(),name:n}))]; await setDoc(doc(db,"meta","cats"),{list:catList}); setCats(catList); }
+      const catId=n=>catList.find(c=>String(c.name).trim().toLowerCase()===n.toLowerCase()).id;
+      // 3) delete old, 4) add new
+      toast_(`⏳ Removing ${old.length} old items…`);
+      for(let i=0;i<old.length;i+=400){ const batch=writeBatch(db); old.slice(i,i+400).forEach(b=>batch.delete(doc(db,"bur",b.id))); await batch.commit(); }
+      toast_(`⏳ Adding ${parsed.length} items…`);
+      for(let i=0;i<parsed.length;i+=400){ const batch=writeBatch(db); parsed.slice(i,i+400).forEach(p=>batch.set(doc(collection(db,"bur")),{pid,catId:catId(p.cat),code:codeWithUnit(p.code,p.unit),desc:p.desc,unit:p.unit,labour:0,material:p.rate,plant:0,subcon:0,oh:0,profit:0,
+        costData:p.quotes.map(q=>({id:uid(),component:"subcon",supplier:q.supplier,rate:q.rate,date:q.date,location:"",note:"",imgs:[]})),quote:null,group:""})); await batch.commit(); }
+      setSelCat(catId(parsed[0].cat));
+      toast_(`✅ BUR replaced: ${parsed.length} items from ${file.name}`);
+    }catch(e){ toast_("⚠️ Replace failed: "+(e&&e.message||e)); }
+  };
   // One-off: append "_unit" to every BUR code in this project that doesn't already end with it.
   const codesMissingUnit=burItems.filter(b=>b.code&&codeWithUnit(b.code,b.unit)!==String(b.code).trim());
   const addUnitToCodes=async()=>{ const list=codesMissingUnit; if(!list.length)return;
@@ -915,7 +974,8 @@ export default function App(){
                 {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
                 <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
                 {codesMissingUnit.length>0&&<button onClick={addUnitToCodes} title="Append _unit to BUR codes (e.g. Acoustic_feltCeiling → Acoustic_feltCeiling_m2)" style={{background:"#fff7ed",color:"#c2410c",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>+ _unit to {codesMissingUnit.length} codes</button>}
-                <button onClick={exportBUR}style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⤓ Export Excel</button>
+                <label title="Clear this project's BUR and load all items from a master BUR.xlsx (a backup downloads first)" style={{background:"#fef2f2",color:"#b91c1c",border:"1px solid #fca5a5",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⟳ Replace BUR from Excel…<input type="file" accept=".xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files[0]; e.target.value=""; replaceBurFromExcel(f);}}/></label>
+                <button onClick={exportBUR} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⤓ Export Excel</button>
               </div>
 
               <div style={{display:"flex",gap:6,marginBottom:8,fontSize:11,color:"#64748b",alignItems:"center",flexWrap:"wrap"}}>
