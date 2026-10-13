@@ -86,13 +86,15 @@ const parseBurWorkbook=(wb,catNames=[])=>{
   const ws=wb.worksheets[0]; const known=new Set(catNames.map(n=>String(n).trim().toLowerCase()));
   const val=c=>{ const v=c.value; if(v&&typeof v==="object"){ if("result" in v)return v.result; if(v.richText)return v.richText.map(t=>t.text).join(""); if(v.text!=null)return v.text; return undefined; } return v; };
   const str=c=>{ const v=val(c); return v==null?"":String(v).trim(); };
-  const SUP0=18, SUPN=28; let cat="(Uncategorised)", hdr={}; const items=[];
+  const SUP0=18, SUPN=28; let cat="(Uncategorised)", hdr={}, sub=""; const items=[];
   const DATE_TAG=/\((SLA|PS|CAG|WAS|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i;
   for(let r=1;r<=ws.rowCount;r++){
-    const A=str(ws.getCell(r,1)),B=str(ws.getCell(r,2)),D=str(ws.getCell(r,4));
+    const A=str(ws.getCell(r,1)),B=str(ws.getCell(r,2)); let D=str(ws.getCell(r,4));
     if(r<6&&/^description$/i.test(A))continue;
     const orange=(ws.getCell(r,1).fill?.fgColor?.argb||"").toUpperCase()==="FFFFC000";
-    if(!D&&A&&(orange||(!B&&known.has(A.toLowerCase())))){ cat=A; hdr={}; }
+    if(orange&&A)D=""; // an orange category heading is never an item, even with text (e.g. "Mortar") in the Code column
+    if(!D&&A&&(orange||(!B&&known.has(A.toLowerCase())))){ cat=A; hdr={}; sub=""; }
+    if(!D&&B){ const bc=ws.getCell(r,2), rt=bc.value&&bc.value.richText; if(bc.font?.underline||(rt&&rt.some(t=>t.font&&t.font.underline))) sub=B.replace(/\s+/g," ").replace(/[-:]+$/,"").trim(); }
     if(!D){
       // supplier-name row: a category row, 2+ names, or a single pale-yellow / date-tagged name. Lone notes (sizes, remarks) are ignored.
       const texts=[]; for(let c=SUP0;c<=SUPN;c++){ const cell=ws.getCell(r,c), v=val(cell); if(typeof v==="string"&&v.trim())texts.push({c,v:v.trim(),yellow:(cell.fill?.fgColor?.argb||"").toUpperCase()==="FFFFFFCC"}); }
@@ -103,10 +105,15 @@ const parseBurWorkbook=(wb,catNames=[])=>{
     const num=c=>{ const v=val(ws.getCell(r,c)); return typeof v==="number"&&isFinite(v)?v:null; };
     const rate=num(5)??num(6)??0;
     const quotes=[]; for(let c=SUP0;c<=SUPN;c++){ const q=num(c); if(q!=null&&q!==0&&hdr[c])quotes.push({supplier:hdr[c].supplier,date:hdr[c].date,rate:Math.round(q*100)/100}); }
-    items.push({cat,code:D,desc:B||D,unit:str(ws.getCell(r,3))||"sum",rate:Math.round(rate*100)/100,quotes});
+    items.push({cat,group:sub,ord:r,code:D,desc:B||D,unit:str(ws.getCell(r,3))||"sum",rate:Math.round(rate*100)/100,quotes});
   }
   return items;
 };
+// Group a category's items under their sub-category (item.group). Items with no sub-category come first; sub-categories follow
+// in the order they appear in the master Excel (item.ord), then A–Z. Order inside each sub-category is kept as given.
+const orderBySubcat=list=>{ const first={}, minOrd={}; list.forEach((b,i)=>{ const g=String(b.group||"").trim(); if(!(g in first))first[g]=i; if(b.ord!=null)minOrd[g]=Math.min(minOrd[g]??Infinity,+b.ord); });
+  const keys=Object.keys(first).sort((a,b)=>a===""?-1:b===""?1:((minOrd[a]??Infinity)-(minOrd[b]??Infinity))||a.localeCompare(b,undefined,{numeric:true}));
+  return keys.flatMap(k=>list.filter(b=>String(b.group||"").trim()===k)); };
 const findBurByCode=(items,code)=>{ const k=String(code||"").trim().toLowerCase(); if(!k)return undefined; const lc=s=>String(s||"").trim().toLowerCase();
   return items.find(b=>lc(b.code)===k)||items.find(b=>b.code&&(lc(codeBase(b.code,b.unit))===k||lc(codeWithUnit(b.code,b.unit))===k)); };
 const ROUND_OPTS=[["","Exact"],["0","Whole $"],["1","1 decimal"]];
@@ -464,8 +471,8 @@ export default function App(){
       // group by category (same order as the sidebar)
       const groups=[]; const known=new Set();
       const orderedCats=catSort==="none"?cats:[...cats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
-      for(const cat of orderedCats){ known.add(cat.id); const items=burItems.filter(b=>b.catId===cat.id).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(items.length)groups.push({name:cat.name,items}); }
-      const orphan=burItems.filter(b=>!known.has(b.catId)).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(orphan.length)groups.push({name:"(Uncategorised)",items:orphan});
+      for(const cat of orderedCats){ known.add(cat.id); const items=orderBySubcat(burItems.filter(b=>b.catId===cat.id).sort((a,b)=>(a.code||"").localeCompare(b.code||""))); if(items.length)groups.push({name:cat.name,items}); }
+      const orphan=orderBySubcat(burItems.filter(b=>!known.has(b.catId)).sort((a,b)=>(a.code||"").localeCompare(b.code||""))); if(orphan.length)groups.push({name:"(Uncategorised)",items:orphan});
       // per category: one column per supplier + quote date (case-insensitive), e.g. "Kiong Gay (Jan 24)" and "Kiong Gay (SLA Sep 26)" are separate columns
       const supKey=e=>(String(e.supplier||"").trim()+"|"+String(e.date||"").trim()).toLowerCase();
       let maxSup=0;
@@ -488,7 +495,9 @@ export default function App(){
         [[8,"Quote"],[11,"Labour"],[12,"Material"],[13,"Plant"]].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center"}}));
         g.sups.forEach((s,i)=>{ const d=[...s.dates]; put(r,SUP0+i,s.name+(d.length===1?`\n(${d[0]})`:""),{fill:C_SUPHDR,bd:1,al:{horizontal:"center",wrapText:true}}); });
         ws.getRow(r).height=g.sups.some(s=>s.dates.size===1)?25.5:12.75; r++;
+        let curSub="";
         for(const it of g.items){
+          const sg=String(it.group||"").trim(); if(sg&&sg!==curSub){ r++; put(r,2,sg,{font:{bold:true,underline:true}}); r++; } curSub=sg;
           const row=ws.getRow(r);
           const lab=+it.labour||0,mat=+it.material||0,pl=+it.plant||0,sub=+it.subcon||0,oh=+it.oh||0,pr=+it.profit||0;
           const latest={}; (it.costData||[]).forEach(e=>{ const k=supKey(e); if(!String(e.supplier||"").trim()||!(k in g.supIdx))return; latest[k]=e; });
@@ -715,7 +724,9 @@ export default function App(){
     else{av=a[sortBy]||"";bv=b[sortBy]||"";}
     return String(av).localeCompare(String(bv),undefined,{numeric:true})*sortDir;
   });
-  const catTotal=_sorted.length; const catItems=_sorted.slice(0,BUR_MAX);
+  const burGrouped=!(_q&&!burSearchCat); const _ordered=burGrouped?orderBySubcat(_sorted):_sorted;
+  const catTotal=_ordered.length; const catItems=_ordered.slice(0,BUR_MAX);
+  const subcatsOf=cid=>[...new Set(burItems.filter(b=>b.catId===cid).map(b=>String(b.group||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const toggleSort=f=>{ if(sortBy===f)setSortDir(d=>-d); else{setSortBy(f);setSortDir(1);} };
   const renameCat=cid=>{ const c=cats.find(x=>x.id===cid); if(!c)return; const nm=prompt("Rename category:",c.name); if(nm&&nm.trim())pushCats(cats.map(x=>x.id===cid?{...x,name:nm.trim()}:x)); };
   const delCat=cid=>{ const n=burItems.filter(b=>b.catId===cid).length; if(n>0){alert(`This category has ${n} item(s). Move them to another category first (open an item → CATEGORY), then delete.`);return;} if(confirm("Delete this empty category?")){ pushCats(cats.filter(x=>x.id!==cid)); if(selCat===cid){const o=cats.find(x=>x.id!==cid); setSelCat(o?o.id:"");} } };
@@ -725,6 +736,35 @@ export default function App(){
     if(e.shiftKey&&a>=0&&b>=0){ const on=!selBur.has(id), range=ids.slice(Math.min(a,b),Math.max(a,b)+1); setSelBur(prev=>{const s=new Set(prev); range.forEach(x=>on?s.add(x):s.delete(x)); return s;}); }
     else toggleSel(id);
     lastSelRef.current=id; };
+  const bulkSetSubcat=async v=>{ const ids=[...selBur]; if(!ids.length)return; let g=v;
+    if(v==="__new"){ g=prompt("New sub-category name (e.g. ALUMINIUM FIN):"); if(g==null)return; g=g.trim(); if(!g)return; }
+    if(v==="__none")g="";
+    recordFields(ids,["group"],`Sub-category on ${ids.length} item(s)`);
+    try{ for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{group:g})); await batch.commit();} toast_(g?`✅ ${ids.length} item(s) → ${g}`:`✅ Removed sub-category from ${ids.length} item(s)`); clearSel(); }catch(e){ toast_("⚠️ "+e.message); } };
+  const renameSubcat=async(cid,oldName)=>{ const nn=prompt(`Rename sub-category "${oldName}" to:\n(leave empty to remove the heading — items stay in the category)`,oldName); if(nn==null)return; const g=nn.trim(); if(g===oldName)return;
+    const ids=burItemsRef.current.filter(b=>b.catId===cid&&String(b.group||"").trim()===oldName).map(b=>b.id); if(!ids.length)return;
+    recordFields(ids,["group"],`Rename sub-category "${oldName}"`);
+    try{ for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{group:g})); await batch.commit();} toast_("✅ Sub-category updated"); }catch(e){ toast_("⚠️ "+e.message); } };
+  // Sync category + sub-category (and Excel row order) from a master BUR.xlsx, matching items by code.
+  // Codes, rates, quotes and photos are not touched. Categories named in the Excel but missing in the app are created.
+  const subcatsFromExcel=async file=>{ if(!file)return; if(!/\.xlsx$/i.test(file.name)){toast_("⚠️ Use a .xlsx file");return;}
+    try{ toast_("⏳ Reading "+file.name+"…");
+      const ExcelJS=(await import("exceljs")).default; const wb=new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
+      const parsed=parseBurWorkbook(wb,cats.map(c=>c.name)).map(p=>({...p,code:codeWithUnit(p.code,p.unit)}));
+      const findCat=n=>cats.find(c=>String(c.name).trim().toLowerCase()===String(n).trim().toLowerCase());
+      const changes=[]; burItemsRef.current.forEach(b=>{ const m=b.code&&findBurByCode(parsed,b.code); if(!m)return; const c=findCat(m.cat);
+        const moved=!c||c.id!==b.catId; if(moved||String(b.group||"")!==m.group||b.ord!==m.ord)changes.push({id:b.id,m,moved}); });
+      if(!changes.length){toast_("Nothing to update — categories and sub-categories already match");return;}
+      const moves=changes.filter(c=>c.moved), named=changes.filter(c=>c.m.group).length;
+      const moveSummary=Object.entries(moves.reduce((o,c)=>{o[c.m.cat]=(o[c.m.cat]||0)+1;return o;},{})).map(([k,v])=>`  • ${v} → ${k}`).join("\n");
+      if(!confirm(`Sync from ${file.name}?\n\n${changes.length} item(s) matched by code; ${named} get a sub-category heading.${moves.length?`\n\n${moves.length} item(s) will MOVE category to match the Excel:\n${moveSummary}`:""}\n\nCodes, rates, quotes and photos are not changed. You can Undo.`))return;
+      let catList=cats; const missing=[...new Set(moves.map(c=>c.m.cat))].filter(n=>!findCat(n));
+      if(missing.length){ catList=[...cats,...missing.map(n=>({id:"c"+uid(),name:n}))]; await setDoc(doc(db,"meta","cats"),{list:catList}); setCats(catList); }
+      const catIdOf=n=>catList.find(c=>String(c.name).trim().toLowerCase()===String(n).trim().toLowerCase()).id;
+      recordFields(changes.map(c=>c.id),["catId","group","ord"],"Sync categories from Excel");
+      for(let i=0;i<changes.length;i+=400){const batch=writeBatch(db); changes.slice(i,i+400).forEach(({id,m})=>batch.update(doc(db,"bur",id),{catId:catIdOf(m.cat),group:m.group,ord:m.ord})); await batch.commit();}
+      toast_(`✅ Updated ${changes.length} item(s)${moves.length?` (${moves.length} moved category)`:""}`);
+    }catch(e){ toast_("⚠️ "+(e&&e.message||e)); } };
   const bulkDelete=async()=>{ const ids=[...selBur]; if(!ids.length)return;
     if(!confirm(`Delete ${ids.length} BUR item(s)?
 
@@ -760,7 +800,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
       for(let i=0;i<old.length;i+=400){ const batch=writeBatch(db); old.slice(i,i+400).forEach(b=>batch.delete(doc(db,"bur",b.id))); await batch.commit(); }
       toast_(`⏳ Adding ${parsed.length} items…`);
       for(let i=0;i<parsed.length;i+=400){ const batch=writeBatch(db); parsed.slice(i,i+400).forEach(p=>batch.set(doc(collection(db,"bur")),{pid,catId:catId(p.cat),code:codeWithUnit(p.code,p.unit),desc:p.desc,unit:p.unit,labour:0,material:p.rate,plant:0,subcon:0,oh:0,profit:0,
-        costData:p.quotes.map(q=>({id:uid(),component:"subcon",supplier:q.supplier,rate:q.rate,date:q.date,location:"",note:"",imgs:[]})),quote:null,group:""})); await batch.commit(); }
+        costData:p.quotes.map(q=>({id:uid(),component:"subcon",supplier:q.supplier,rate:q.rate,date:q.date,location:"",note:"",imgs:[]})),quote:null,group:p.group||"",ord:p.ord})); await batch.commit(); }
       setSelCat(catId(parsed[0].cat));
       toast_(`✅ BUR replaced: ${parsed.length} items from ${file.name}`);
     }catch(e){ toast_("⚠️ Replace failed: "+(e&&e.message||e)); }
@@ -794,7 +834,11 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
           {items.map((item,ri)=>{
             const isExp=expBur===item.id; const total=bTot(item); const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0); const cdCount=(item.costData||[]).length; const dup=isDupCode(item.code); const checked=selBur.has(item.id);
             const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2}; const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
+            const g=String(item.group||"").trim(), newGrp=burGrouped&&g&&(ri===0||String(items[ri-1].group||"").trim()!==g), grpItems=newGrp?items.filter(x=>String(x.group||"").trim()===g):[];
             return(<Fragment key={item.id}>
+              {newGrp&&<tr style={{background:"#f8fafc"}}><td style={{textAlign:"center",borderBottom:"1px solid #e2e8f0"}}><input type="checkbox" title="Select all in this sub-category" checked={grpItems.every(x=>selBur.has(x.id))} onChange={e=>setSelBur(prev=>{const s=new Set(prev); grpItems.forEach(x=>e.target.checked?s.add(x.id):s.delete(x.id)); return s;})} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
+                <td colSpan={burHead.length+2} style={{padding:"7px 8px",borderBottom:"1px solid #e2e8f0",fontWeight:700,textDecoration:"underline",color:"#0f172a",fontSize:12}}>{g} <span style={{textDecoration:"none",fontWeight:500,color:"#94a3b8",fontSize:11}}>({grpItems.length})</span>
+                  <button onClick={()=>renameSubcat(item.catId,g)} title="Rename this sub-category" style={{marginLeft:8,background:"none",border:"none",cursor:"pointer",color:"#94a3b8",fontSize:12}}>✎</button></td></tr>}
               <tr style={{borderBottom:"1px solid #f8fafc",background:checked?"#ede9fe":(ri%2===1?"#f5f3ff":"#fff")}}>
                 <td style={{padding:"2px 4px",textAlign:"center"}}><input type="checkbox" title="Click to select · Shift+click to select a range" checked={checked} onChange={()=>{}} onClick={e=>clickSel(e,item.id,items)} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
                 <td draggable onDragStart={e=>{e.dataTransfer.setData("text/bur",item.id);e.dataTransfer.effectAllowed="move";}} title="Drag me onto a category to move • click to expand" style={{padding:"2px 4px",textAlign:"center",cursor:"grab",color:isExp?"#2563eb":"#94a3b8",userSelect:"none"}} onClick={()=>setExpBur(isExp?null:item.id)}>⠿{isExp?"▼":"▶"}</td>
@@ -819,6 +863,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                   <div><label style={lbl}>PROFIT %</label><input type="number" style={{...inp,width:70}} value={item.profit??10} onChange={e=>updBur(item.id,{profit:+e.target.value||0})}/></div>
                   <div><label style={lbl}>ROUND UP RATE</label><select style={{...inp,width:110}} value={hasRoundUp(item)?String(item.roundUp):""} onChange={e=>updBur(item.id,{roundUp:e.target.value===""?null:+e.target.value})}>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
                   <div><label style={lbl}>CATEGORY</label><select style={{...inp,background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                  <div><label style={lbl}>SUB-CATEGORY</label><input list={"subcats_"+item.id} style={{...inp,width:200}} placeholder="(none)" value={item.group||""} onChange={e=>updBur(item.id,{group:e.target.value})}/><datalist id={"subcats_"+item.id}>{subcatsOf(item.catId).map(g=><option key={g} value={g}/>)}</datalist></div>
                   <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b> · OH({item.oh}%) <b>S$ {fmt(direct*(+item.oh||0)/100)}</b> · <span style={{color:"#1d4ed8",fontWeight:800}}>Total S$ {fmt(total)}/{item.unit}</span></div>
                 </div>
               </td></tr>)}
@@ -1026,6 +1071,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
                 {codesMissingUnit.length>0&&<button onClick={addUnitToCodes} title="Append _unit to BUR codes (e.g. Acoustic_feltCeiling → Acoustic_feltCeiling_m2)" style={{background:"#fff7ed",color:"#c2410c",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>+ _unit to {codesMissingUnit.length} codes</button>}
                 {undoLabel&&<button onClick={undoLast} title={"Undo: "+undoLabel+" (Ctrl+Z)"} style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",maxWidth:260,overflow:"hidden",textOverflow:"ellipsis"}}>↶ Undo: {undoLabel}</button>}
+                <label title="Match items to a master BUR.xlsx by code and set their category + sub-category (underlined headings in column B). Codes, rates, quotes and photos are not changed." style={{background:"#f5f3ff",color:"#6d28d9",border:"1px solid #c4b5fd",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>☰ Sync categories from Excel…<input type="file" accept=".xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files[0]; e.target.value=""; subcatsFromExcel(f);}}/></label>
                 <label title="Clear this project's BUR and load all items from a master BUR.xlsx (a backup downloads first)" style={{background:"#fef2f2",color:"#b91c1c",border:"1px solid #fca5a5",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⟳ Replace BUR from Excel…<input type="file" accept=".xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files[0]; e.target.value=""; replaceBurFromExcel(f);}}/></label>
                 <button onClick={exportBUR} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⤓ Export Excel</button>
               </div>
@@ -1040,6 +1086,8 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
 
               {selBur.size>0&&<div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8,background:"#ede9fe",border:"1px solid #c4b5fd",borderRadius:8,padding:"6px 10px",flexWrap:"wrap"}}>
                 <b style={{fontSize:12,color:"#5b21b6"}}>{selBur.size} selected</b>
+                <span style={{fontSize:11,color:"#475569"}}>Sub-category:</span>
+                <select value="" onChange={e=>{if(e.target.value)bulkSetSubcat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff",maxWidth:180}}><option value="">Sub-category…</option><option value="__new">＋ New…</option><option value="__none">(none)</option>{subcatsOf(selCat).map(g=><option key={g} value={g}>{g}</option>)}</select>
                 <span style={{fontSize:11,color:"#475569"}}>Move to:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkMoveCat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Category…</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
                 <span style={{fontSize:11,color:"#475569"}}>Set unit:</span>
