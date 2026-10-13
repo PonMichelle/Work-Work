@@ -457,7 +457,10 @@ export default function App(){
           const costCell=(c,comp,v)=>put(r,c,sel[comp]!==undefined?{formula:`+${L(SUP0+g.supIdx[sel[comp]])}${r}`,result:v}:(v||null),{fill:c===8?C_QUOTE:undefined,nf:NF,al:{horizontal:"center"}});
           put(r,2,it.desc||"",{al:{wrapText:true}});
           put(r,3,it.unit||"",{al:{horizontal:"center"}});
-          const cc=put(r,4,it.code||"",{fill:it.code?C_CODE:undefined,al:{horizontal:"left",wrapText:true}});
+          // Code gets "_unit" appended (e.g. Acoustic_feltCeiling_m2) unless it already ends with it
+          const uTag=String(it.unit||"").trim().replace(/²/g,"2").replace(/³/g,"3").replace(/\s+/g,"");
+          const codeOut=(it.code||"")&&uTag&&!(it.code||"").toLowerCase().endsWith("_"+uTag.toLowerCase())?`${it.code}_${uTag}`:(it.code||"");
+          const cc=put(r,4,codeOut,{fill:it.code?C_CODE:undefined,al:{horizontal:"left",wrapText:true}});
           if((codeCount[(it.code||"").trim().toLowerCase()]||0)>1){ cc.fill=fill("FFFECACA"); cc.font={...F,bold:true,color:{argb:"FFB91C1C"}}; }
           const amt=bTot(it);
           put(r,5,{formula:`+F${r}`,result:amt},{font:{bold:true},fill:C_RATE,nf:NF,al:{horizontal:"center"}});
