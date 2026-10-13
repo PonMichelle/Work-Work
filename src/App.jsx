@@ -73,6 +73,14 @@ const fmt=n=>(n||0).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFract
 const shrinkDataURL=(dataUrl,max=460,q=0.45)=>new Promise(res=>{ if(!dataUrl){res("");return;} const im=new Image(); im.onload=()=>{ let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",q));}catch{res(dataUrl);} }; im.onerror=()=>res(dataUrl); im.src=dataUrl; });
 const imgToDataURL=blob=>new Promise(res=>{ if(!blob){res("");return;} const fr=new FileReader(); fr.onload=()=>{ const im=new Image(); im.onload=()=>{ const max=1100; let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",0.7));}catch{res("");} }; im.onerror=()=>res(""); im.src=fr.result; }; fr.onerror=()=>res(""); fr.readAsDataURL(blob); });
 const uid=()=>"_"+Math.random().toString(36).slice(2,10);
+// BUR codes carry their unit as a suffix, e.g. Acoustic_feltCeiling_m2. Lookups accept the code with or without the suffix,
+// so older BOQ rows / Master BQ templates that still use the bare code keep matching.
+const unitTag=u=>String(u||"").trim().replace(/²/g,"2").replace(/³/g,"3").replace(/%/g,"pct").replace(/\s+/g,"");
+const codeBase=(code,unit)=>{ const c=String(code||"").trim(), t=unitTag(unit); return t&&c.toLowerCase().endsWith("_"+t.toLowerCase())?c.slice(0,-(t.length+1)):c; };
+const codeWithUnit=(code,unit)=>{ const c=String(code||"").trim(), t=unitTag(unit); if(!c||!t)return c; return c.toLowerCase().endsWith("_"+t.toLowerCase())?c:`${c}_${t}`; };
+const swapUnitTag=(code,oldU,newU)=>String(code||"").trim()?codeWithUnit(codeBase(code,oldU),newU):code;
+const findBurByCode=(items,code)=>{ const k=String(code||"").trim().toLowerCase(); if(!k)return undefined; const lc=s=>String(s||"").trim().toLowerCase();
+  return items.find(b=>lc(b.code)===k)||items.find(b=>b.code&&(lc(codeBase(b.code,b.unit))===k||lc(codeWithUnit(b.code,b.unit))===k)); };
 const bTot=b=>{const d=(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0),oh=d*(+b.oh||0)/100,s=d+oh;return s*(1+(+b.profit||0)/100);};
 // Custom BOQ columns: compute each column's value per row. Formula columns can reference
 // qty, rateA, rateB, amtA, amtB, and earlier custom columns (by sanitised name).
@@ -316,7 +324,7 @@ export default function App(){
 
   const delItem=useCallback((sid,iid)=>{ if(!data)return; const nd=JSON.parse(JSON.stringify(data)); const sec=nd.sections.find(s=>s.id===sid); const item=sec?.items.find(i=>i.id===iid); if(sec&&item){ sec.items=sec.items.filter(i=>i.id!==iid); pushData(nd,`Deleted item in ${sec.name}`);} },[data,pushData]);
 
-  const blurSave=useCallback((sid,iid,code)=>{ if(code){const m=burItems.find(b=>b.code&&b.code.toLowerCase()===code.toLowerCase()); if(m&&bTot(m)>0)setRateSugg({secId:sid,iid,rate:bTot(m),code:m.code,desc:m.desc});} },[burItems]);
+  const blurSave=useCallback((sid,iid,code)=>{ if(code){const m=findBurByCode(burItems,code); if(m&&bTot(m)>0)setRateSugg({secId:sid,iid,rate:bTot(m),code:m.code,desc:m.desc});} },[burItems]);
 
   // Custom BOQ columns (Excel-style)
   const addCol=useCallback(()=>{
@@ -340,6 +348,8 @@ export default function App(){
       else { const res=await fetch(import.meta.env.BASE_URL+"boq-template.xlsx"); if(!res.ok)throw new Error("template file not found"); buf=await res.arrayBuffer(); }
       const wb=new ExcelJS.Workbook(); await wb.xlsx.load(buf);
       const codeMap={}; for(const b of burItems){ const k=(b.code||"").trim().toLowerCase(); if(k&&!codeMap[k])codeMap[k]=b; }
+      // also match template codes written without (or with) the _unit suffix
+      for(const b of burItems){ if(!b.code)continue; for(const k of [codeBase(b.code,b.unit),codeWithUnit(b.code,b.unit)].map(s=>s.toLowerCase())) if(k&&!codeMap[k])codeMap[k]=b; }
       const toStr=v=>{ if(v==null)return ""; if(typeof v==="object"){ if(v.richText)return v.richText.map(t=>t.text).join(""); if(v.text!=null)return String(v.text); if(v.result!=null)return String(v.result); return ""; } return String(v); };
       let filled=0; const unmatched=new Set(); let scanned=0;
       wb.eachSheet(ws=>{
@@ -458,8 +468,7 @@ export default function App(){
           put(r,2,it.desc||"",{al:{wrapText:true}});
           put(r,3,it.unit||"",{al:{horizontal:"center"}});
           // Code gets "_unit" appended (e.g. Acoustic_feltCeiling_m2) unless it already ends with it
-          const uTag=String(it.unit||"").trim().replace(/²/g,"2").replace(/³/g,"3").replace(/\s+/g,"");
-          const codeOut=(it.code||"")&&uTag&&!(it.code||"").toLowerCase().endsWith("_"+uTag.toLowerCase())?`${it.code}_${uTag}`:(it.code||"");
+          const codeOut=codeWithUnit(it.code,it.unit);
           const cc=put(r,4,codeOut,{fill:it.code?C_CODE:undefined,al:{horizontal:"left",wrapText:true}});
           if((codeCount[(it.code||"").trim().toLowerCase()]||0)>1){ cc.fill=fill("FFFECACA"); cc.font={...F,bold:true,color:{argb:"FFB91C1C"}}; }
           const amt=bTot(it);
@@ -529,7 +538,7 @@ export default function App(){
     const first=lines[0].split("\t").map(s=>s.trim().toLowerCase());
     const start=(first[0]==="description"||first.includes("code"))?1:0;
     const rows=[];
-    for(let i=start;i<lines.length;i++){ const c=lines[i].split("\t"); const desc=(c[0]||"").trim(),unit=(c[1]||"").trim(),code=(c[2]||"").trim(); const rate=parseFloat(String(c[3]||"").replace(/[^0-9.\-]/g,""))||0; if(!desc&&!code)continue; rows.push({pid,catId:pasteCat,code,desc:desc||"(no description)",unit:unit||"sum",labour:0,material:rate,plant:0,subcon:0,oh:0,profit:0,costData:[],quote:null,group:"Pasted"}); }
+    for(let i=start;i<lines.length;i++){ const c=lines[i].split("\t"); const desc=(c[0]||"").trim(),unit=(c[1]||"").trim(),code=(c[2]||"").trim(); const rate=parseFloat(String(c[3]||"").replace(/[^0-9.\-]/g,""))||0; if(!desc&&!code)continue; rows.push({pid,catId:pasteCat,code:codeWithUnit(code,unit||"sum"),desc:desc||"(no description)",unit:unit||"sum",labour:0,material:rate,plant:0,subcon:0,oh:0,profit:0,costData:[],quote:null,group:"Pasted"}); }
     if(!rows.length){toast_("⚠️ No rows parsed — expected: Description, Unit, Code, Rate");return;}
     try{ let batch=writeBatch(db),n=0; for(const r of rows){ batch.set(doc(collection(db,"bur")),r); n++; if(n%400===0){await batch.commit();batch=writeBatch(db);} } await batch.commit(); setPasteOpen(false);setPasteText("");setSelCat(pasteCat); toast_(`✅ Imported ${rows.length} items`);}catch(e){toast_("⚠️ "+e.message);}
   },[pasteText,pasteCat,toast_,pid]);
@@ -649,7 +658,12 @@ export default function App(){
   const clearSel=()=>setSelBur(new Set());
   const moveItemsToCat=async(ids,cid)=>{ if(!ids.length||!cid)return; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{catId:cid})); await batch.commit();} };
   const bulkMoveCat=async cid=>{ const ids=[...selBur]; if(!ids.length||!cid)return; await moveItemsToCat(ids,cid); toast_(`✅ Moved ${ids.length} item(s)`); clearSel(); };
-  const bulkSetUnit=async u=>{ const ids=[...selBur]; if(!ids.length||!u)return; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{unit:u})); await batch.commit();} toast_(`✅ Set unit on ${ids.length} item(s)`); clearSel(); };
+  // One-off: append "_unit" to every BUR code in this project that doesn't already end with it.
+  const codesMissingUnit=burItems.filter(b=>b.code&&codeWithUnit(b.code,b.unit)!==String(b.code).trim());
+  const addUnitToCodes=async()=>{ const list=codesMissingUnit; if(!list.length)return;
+    if(!confirm(`Add "_unit" to ${list.length} BUR code(s)?\n\ne.g. ${list[0].code}  →  ${codeWithUnit(list[0].code,list[0].unit)}\n\nBOQ rows and Master BQ templates using the old codes will still match.`))return;
+    try{ for(let i=0;i<list.length;i+=400){ const batch=writeBatch(db); list.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{code:codeWithUnit(b.code,b.unit)})); await batch.commit(); } toast_(`✅ Updated ${list.length} code(s)`); }catch(e){ toast_("⚠️ "+e.message); } };
+  const bulkSetUnit=async u=>{ const ids=[...selBur]; if(!ids.length||!u)return; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>{ const b=burItemsRef.current.find(x=>x.id===id); batch.update(doc(db,"bur",id),b&&b.code?{unit:u,code:swapUnitTag(b.code,b.unit,u)}:{unit:u}); }); await batch.commit();} toast_(`✅ Set unit on ${ids.length} item(s)`); clearSel(); };
   const handleDropCat=(cid,e)=>{ e.preventDefault(); const id=e.dataTransfer.getData("text/bur"); if(!id)return; const ids=(selBur.has(id)&&selBur.size>1)?[...selBur]:[id]; moveItemsToCat(ids,cid).then(()=>{toast_(`✅ Moved ${ids.length} item(s)`);clearSel();}); };
   const _codeCount={}; burItems.forEach(b=>{const k=(b.code||"").trim().toLowerCase(); if(k)_codeCount[k]=(_codeCount[k]||0)+1;});
   const isDupCode=code=>{const k=(code||"").trim().toLowerCase(); return !!k&&_codeCount[k]>1;};
@@ -677,8 +691,8 @@ export default function App(){
                 <td style={{padding:"2px 4px",textAlign:"center"}}><input type="checkbox" checked={checked} onChange={()=>toggleSel(item.id)} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
                 <td draggable onDragStart={e=>{e.dataTransfer.setData("text/bur",item.id);e.dataTransfer.effectAllowed="move";}} title="Drag me onto a category to move • click to expand" style={{padding:"2px 4px",textAlign:"center",cursor:"grab",color:isExp?"#2563eb":"#94a3b8",userSelect:"none"}} onClick={()=>setExpBur(isExp?null:item.id)}>⠿{isExp?"▼":"▶"}</td>
                 <td style={{padding:"3px 6px",overflow:"hidden"}}><input style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></td>
-                <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent",width:"100%"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
-                <td style={{padding:"3px 6px",overflow:"hidden",background:dup?"#fee2e2":undefined}}><input title={dup?"⚠️ Duplicate BUR code":""} style={{width:"100%",border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:dup?"#b91c1c":"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})}/></td>
+                <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent",width:"100%"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value,code:swapUnitTag(item.code,item.unit,e.target.value)})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
+                <td style={{padding:"3px 6px",overflow:"hidden",background:dup?"#fee2e2":undefined}}><input title={dup?"⚠️ Duplicate BUR code":""} style={{width:"100%",border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:dup?"#b91c1c":"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})} onBlur={e=>{const c=codeWithUnit(e.target.value,item.unit); if(c!==e.target.value)updBur(item.id,{code:c});}}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.labour?item.labour:""} onChange={e=>updBur(item.id,{labour:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.material?item.material:""} onChange={e=>updBur(item.id,{material:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.plant?item.plant:""} onChange={e=>updBur(item.id,{plant:+e.target.value||0})}/></td>
@@ -689,7 +703,7 @@ export default function App(){
               {isExp&&(<tr><td colSpan={11} style={{background:"#fafafa",padding:"12px 16px",borderBottom:"1px solid #eef2f7"}}>
                 <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:12}}>
                   <div style={{flex:"2 1 320px"}}><label style={lbl}>DESCRIPTION (full)</label><textarea value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:6,padding:"7px 10px",fontSize:13,outline:"none",minHeight:64,resize:"vertical",boxSizing:"border-box",lineHeight:1.4}}/></div>
-                  <div style={{flex:"1 1 180px"}}><label style={lbl}>BUR CODE</label><input value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:6,padding:"7px 10px",fontSize:13,outline:"none",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8",boxSizing:"border-box"}}/></div>
+                  <div style={{flex:"1 1 180px"}}><label style={lbl}>BUR CODE</label><input value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})} onBlur={e=>{const c=codeWithUnit(e.target.value,item.unit); if(c!==e.target.value)updBur(item.id,{code:c});}} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:6,padding:"7px 10px",fontSize:13,outline:"none",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8",boxSizing:"border-box"}}/></div>
                 </div>
                 <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
                   <div><label style={lbl}>SUBCON (S$)</label><input type="number" style={{...inp,width:90}} value={item.subcon?item.subcon:""} onChange={e=>updBur(item.id,{subcon:+e.target.value||0})}/></div>
@@ -793,7 +807,7 @@ export default function App(){
           <span style={{fontSize:11,fontWeight:700,color:"#64748b"}}>BOQ mode:</span>
           {[["structured","📋 Structured (code→rate)"],["sheet","📄 Excel grid (drag your file)"]].map(([m,l])=><button key={m} onClick={()=>setBoqMode(m)} style={{border:"1px solid #e2e8f0",background:boqMode===m?"#7c3aed":"#fff",color:boqMode===m?"#fff":"#475569",borderRadius:6,padding:"4px 10px",fontSize:12,cursor:"pointer",fontWeight:600}}>{l}</button>)}
         </div>}
-        {tab==="boq"&&boqMode==="sheet"&&<SheetGrid db={db} pid={pid} toast={toast_} baseUrl={import.meta.env.BASE_URL} onToStructured={importGridToStructured} burLookup={code=>{const b=burItems.find(x=>(x.code||"").trim().toLowerCase()===String(code).trim().toLowerCase()); return b?{material:+b.material||0,labour:+b.labour||0,total:+bTot(b)||0}:null;}}/>}
+        {tab==="boq"&&boqMode==="sheet"&&<SheetGrid db={db} pid={pid} toast={toast_} baseUrl={import.meta.env.BASE_URL} onToStructured={importGridToStructured} burLookup={code=>{const b=findBurByCode(burItems,code); return b?{material:+b.material||0,labour:+b.labour||0,total:+bTot(b)||0}:null;}}/>}
         {tab==="boq"&&boqMode==="structured"&&(
           <div>
             <div style={{display:"flex",gap:8,marginBottom:12,overflowX:"auto",paddingBottom:4}}>
@@ -900,7 +914,8 @@ export default function App(){
                 <input value={burSearch} onChange={e=>setBurSearch(e.target.value)} placeholder="🔍 Search code, description, or cost-data supplier/note…" style={{flex:1,minWidth:180,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none"}}/>
                 {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
                 <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
-                <button onClick={exportBUR} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⤓ Export Excel</button>
+                {codesMissingUnit.length>0&&<button onClick={addUnitToCodes} title="Append _unit to BUR codes (e.g. Acoustic_feltCeiling → Acoustic_feltCeiling_m2)" style={{background:"#fff7ed",color:"#c2410c",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>+ _unit to {codesMissingUnit.length} codes</button>}
+                <button onClick={exportBUR}style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⤓ Export Excel</button>
               </div>
 
               <div style={{display:"flex",gap:6,marginBottom:8,fontSize:11,color:"#64748b",alignItems:"center",flexWrap:"wrap"}}>
