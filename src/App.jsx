@@ -161,7 +161,7 @@ export default function App(){
   const [burItems,setBurItems]=useState([]);
   const [selCat,setSelCat]=useState(DEF_CATS[0].id);
   const [expBur,setExpBur]=useState(null);
-  const [burSearch,setBurSearch]=useState("");
+  const [burSearch,setBurSearch]=useState(""); const [burSearchCat,setBurSearchCat]=useState(false);
   const [sortBy,setSortBy]=useState("code"); const [sortDir,setSortDir]=useState(1);
   const [burView,setBurView]=useState("tabs"); const [catSort,setCatSort]=useState("none");
   const [selBur,setSelBur]=useState(()=>new Set());
@@ -669,9 +669,10 @@ export default function App(){
   const sidebarCats=catSort==="none"?displayCats:[...displayCats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
   const catName=id=>displayCats.find(c=>c.id===id)?.name||id;
   const BUR_MAX=200; const _q=burSearch.trim().toLowerCase();
-  // When searching, look across the WHOLE BUR library; otherwise show the selected category.
-  const _base=_q?burItems:burItems.filter(b=>b.catId===selCat);
-  const _filtered=_q?_base.filter(b=>(b.code||"").toLowerCase().includes(_q)||(b.desc||"").toLowerCase().includes(_q)||(b.costData||[]).some(e=>(e.supplier||"").toLowerCase().includes(_q)||(e.note||"").toLowerCase().includes(_q))):_base;
+  // When searching, look across the WHOLE BUR library (unless "Only in this category" is ticked); otherwise show the selected category.
+  // Several words = every word must appear (e.g. "ceiling nrc" in code, description, supplier or note).
+  const _base=_q&&!burSearchCat?burItems:burItems.filter(b=>b.catId===selCat); const _words=_q.split(/\s+/).filter(Boolean);
+  const _filtered=_q?_base.filter(b=>{ const hay=[b.code,b.desc,...(b.costData||[]).flatMap(e=>[e.supplier,e.note])].map(x=>String(x||"").toLowerCase()).join(" | "); return _words.every(w=>hay.includes(w)); }):_base;
   const _sorted=[..._filtered].sort((a,b)=>{
     let av,bv;
     if(sortBy==="rate"){av=bTot(a);bv=bTot(b);return (av-bv)*sortDir;}
@@ -971,6 +972,7 @@ export default function App(){
             <div style={{flex:1,minWidth:0}}>
               <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
                 <input value={burSearch} onChange={e=>setBurSearch(e.target.value)} placeholder="🔍 Search code, description, or cost-data supplier/note…" style={{flex:1,minWidth:180,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"7px 12px",fontSize:13,outline:"none"}}/>
+                <label title="Limit the search to the category selected on the left" style={{display:"flex",alignItems:"center",gap:4,fontSize:12,color:"#475569",whiteSpace:"nowrap",cursor:"pointer"}}><input type="checkbox" checked={burSearchCat} onChange={e=>setBurSearchCat(e.target.checked)}/>Only in {catName(selCat)}</label>
                 {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
                 <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
                 {codesMissingUnit.length>0&&<button onClick={addUnitToCodes} title="Append _unit to BUR codes (e.g. Acoustic_feltCeiling → Acoustic_feltCeiling_m2)" style={{background:"#fff7ed",color:"#c2410c",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>+ _unit to {codesMissingUnit.length} codes</button>}
@@ -995,7 +997,7 @@ export default function App(){
                 <button onClick={clearSel} style={{marginLeft:"auto",background:"#fff",border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#5b21b6",fontWeight:600}}>Clear</button>
               </div>}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
-                <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{_q?"🔎 Search results (all categories)":catName(selCat)} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catTotal} items{catItems.length<catTotal?` (showing first ${catItems.length} — refine search)`:""}</span>{dupCount>0&&<span style={{marginLeft:8,background:"#fee2e2",color:"#b91c1c",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>⚠️ {dupCount} duplicate code{dupCount>1?"s":""}</span>}</span>
+                <span style={{fontSize:13,fontWeight:600,color:"#1e293b"}}>{_q?(burSearchCat?`🔎 Search results in ${catName(selCat)}`:"🔎 Search results (all categories)"):catName(selCat)} <span style={{color:"#64748b",fontWeight:400,fontSize:12}}>— {catTotal} items{catItems.length<catTotal?` (showing first ${catItems.length} — refine search)`:""}</span>{dupCount>0&&<span style={{marginLeft:8,background:"#fee2e2",color:"#b91c1c",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>⚠️ {dupCount} duplicate code{dupCount>1?"s":""}</span>}</span>
                 <button onClick={()=>addBurItem(selCat)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add Item</button>
               </div>
 
