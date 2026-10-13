@@ -528,6 +528,7 @@ export default function App(){
   // ── BUR undo (this browser session only) ─────────────────────────────────────
   // Each entry remembers how to put things back: {label, kind:"fields", items:[{id,before}]} | {kind:"deleted", docs:[{id,data}]} | {kind:"created", ids:[]}.
   // Rapid typing in the same field of the same item collapses into one entry, so one Undo reverts the whole edit.
+  const lastSelRef=useRef(null); // last BUR checkbox clicked (for Shift+click range select)
   const undoRef=useRef([]); const [undoLabel,setUndoLabel]=useState("");
   const syncUndo=()=>setUndoLabel(undoRef.current.length?undoRef.current[undoRef.current.length-1].label:"");
   const pushUndo=useCallback(entry=>{ const st=undoRef.current; st.push({...entry,ts:Date.now()}); if(st.length>50)st.shift(); syncUndo(); },[]);
@@ -719,6 +720,18 @@ export default function App(){
   const renameCat=cid=>{ const c=cats.find(x=>x.id===cid); if(!c)return; const nm=prompt("Rename category:",c.name); if(nm&&nm.trim())pushCats(cats.map(x=>x.id===cid?{...x,name:nm.trim()}:x)); };
   const delCat=cid=>{ const n=burItems.filter(b=>b.catId===cid).length; if(n>0){alert(`This category has ${n} item(s). Move them to another category first (open an item → CATEGORY), then delete.`);return;} if(confirm("Delete this empty category?")){ pushCats(cats.filter(x=>x.id!==cid)); if(selCat===cid){const o=cats.find(x=>x.id!==cid); setSelCat(o?o.id:"");} } };
   const toggleSel=id=>setSelBur(prev=>{const s=new Set(prev); s.has(id)?s.delete(id):s.add(id); return s;});
+  // Checkbox click: plain click toggles one row; Shift+click selects (or unselects) every row between the last clicked one and this one.
+  const clickSel=(e,id,list)=>{ const ids=list.map(x=>x.id), a=ids.indexOf(lastSelRef.current), b=ids.indexOf(id);
+    if(e.shiftKey&&a>=0&&b>=0){ const on=!selBur.has(id), range=ids.slice(Math.min(a,b),Math.max(a,b)+1); setSelBur(prev=>{const s=new Set(prev); range.forEach(x=>on?s.add(x):s.delete(x)); return s;}); }
+    else toggleSel(id);
+    lastSelRef.current=id; };
+  const bulkDelete=async()=>{ const ids=[...selBur]; if(!ids.length)return;
+    if(!confirm(`Delete ${ids.length} BUR item(s)?
+
+You can bring them back with the Undo button (until you refresh the page).`))return;
+    const docs=ids.map(id=>burItemsRef.current.find(x=>x.id===id)).filter(Boolean).map(({id,...data})=>({id,data}));
+    try{ for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.delete(doc(db,"bur",id))); await batch.commit();}
+      pushUndo({kind:"deleted",label:`Delete ${docs.length} item(s)`,docs}); toast_(`🗑 Deleted ${ids.length} item(s)`); clearSel(); }catch(e){ toast_("⚠️ "+e.message); } };
   const clearSel=()=>setSelBur(new Set());
   const moveItemsToCat=async(ids,cid)=>{ if(!ids.length||!cid)return; recordFields(ids,["catId"],`Move ${ids.length} item(s) to ${catName(cid)}`); for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{catId:cid})); await batch.commit();} };
   const bulkMoveCat=async cid=>{ const ids=[...selBur]; if(!ids.length||!cid)return; await moveItemsToCat(ids,cid); toast_(`✅ Moved ${ids.length} item(s)`); clearSel(); };
@@ -783,7 +796,7 @@ export default function App(){
             const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2}; const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
             return(<Fragment key={item.id}>
               <tr style={{borderBottom:"1px solid #f8fafc",background:checked?"#ede9fe":(ri%2===1?"#f5f3ff":"#fff")}}>
-                <td style={{padding:"2px 4px",textAlign:"center"}}><input type="checkbox" checked={checked} onChange={()=>toggleSel(item.id)} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
+                <td style={{padding:"2px 4px",textAlign:"center"}}><input type="checkbox" title="Click to select · Shift+click to select a range" checked={checked} onChange={()=>{}} onClick={e=>clickSel(e,item.id,items)} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
                 <td draggable onDragStart={e=>{e.dataTransfer.setData("text/bur",item.id);e.dataTransfer.effectAllowed="move";}} title="Drag me onto a category to move • click to expand" style={{padding:"2px 4px",textAlign:"center",cursor:"grab",color:isExp?"#2563eb":"#94a3b8",userSelect:"none"}} onClick={()=>setExpBur(isExp?null:item.id)}>⠿{isExp?"▼":"▶"}</td>
                 <td style={{padding:"3px 6px",overflow:"hidden"}}><input style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></td>
                 <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent",width:"100%"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value,code:swapUnitTag(item.code,item.unit,e.target.value)})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
@@ -1032,6 +1045,7 @@ export default function App(){
                 <span style={{fontSize:11,color:"#475569"}}>Set unit:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkSetUnit(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Unit…</option>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetRound(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Round up…</option>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
+                <button onClick={bulkDelete} style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>🗑 Delete {selBur.size}</button>
                 <button onClick={clearSel} style={{marginLeft:"auto",background:"#fff",border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#5b21b6",fontWeight:600}}>Clear</button>
               </div>}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
