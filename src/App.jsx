@@ -109,7 +109,10 @@ const parseBurWorkbook=(wb,catNames=[])=>{
 };
 const findBurByCode=(items,code)=>{ const k=String(code||"").trim().toLowerCase(); if(!k)return undefined; const lc=s=>String(s||"").trim().toLowerCase();
   return items.find(b=>lc(b.code)===k)||items.find(b=>b.code&&(lc(codeBase(b.code,b.unit))===k||lc(codeWithUnit(b.code,b.unit))===k)); };
-const bTot=b=>{const d=(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0),oh=d*(+b.oh||0)/100,s=d+oh;return s*(1+(+b.profit||0)/100);};
+const ROUND_OPTS=[["","Exact"],["0","Whole $"],["1","1 decimal"]];
+const hasRoundUp=b=>b&&b.roundUp!==undefined&&b.roundUp!==null&&b.roundUp!=="";
+// Rate = (labour+material+plant+subcon) + OH% + profit%, then rounded UP if the item asks for it (like Excel ROUNDUP(x,0) / ROUNDUP(x,1)).
+const bTot=b=>{const d=(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0),oh=d*(+b.oh||0)/100,s=d+oh;const t=s*(1+(+b.profit||0)/100);if(!hasRoundUp(b))return t;const f=10**(+b.roundUp);return Math.ceil(t*f-1e-9)/f;};
 // Custom BOQ columns: compute each column's value per row. Formula columns can reference
 // qty, rateA, rateB, amtA, amtB, and earlier custom columns (by sanitised name).
 // Compute custom BOQ columns. Formulas may use natural names: Qty, Rate A, Rate B,
@@ -501,8 +504,8 @@ export default function App(){
           const cc=put(r,4,codeOut,{fill:it.code?C_CODE:undefined,al:{horizontal:"left",wrapText:true}});
           if((codeCount[(it.code||"").trim().toLowerCase()]||0)>1){ cc.fill=fill("FFFECACA"); cc.font={...F,bold:true,color:{argb:"FFB91C1C"}}; }
           const amt=bTot(it);
-          put(r,5,{formula:`+F${r}`,result:amt},{font:{bold:true},fill:C_RATE,nf:NF,al:{horizontal:"center"}});
-          put(r,6,{formula:`(SUM(G${r}:M${r})-I${r})*(1+N${r}/100)*(1+O${r}/100)`,result:amt},{nf:NF});
+          put(r,5,{formula:hasRoundUp(it)?`+ROUNDUP(F${r},${+it.roundUp})`:`+F${r}`,result:amt},{font:{bold:true},fill:C_RATE,nf:NF,al:{horizontal:"center"}});
+          put(r,6,{formula:`(SUM(G${r}:M${r})-I${r})*(1+N${r}/100)*(1+O${r}/100)`,result:bTot({...it,roundUp:null})},{nf:NF});
           costCell(8,"subcon",sub); costCell(11,"labour",lab); costCell(12,"material",mat); costCell(13,"plant",pl);
           [[14,oh],[15,pr]].forEach(([c,v])=>put(r,c,v||null,{nf:"0.##",al:{horizontal:"center"}}));
           Object.entries(latest).forEach(([k,e])=>{ const cell=put(r,SUP0+g.supIdx[k],+e.rate||0,{fill:used.has(k)?C_SEL:C_OTHER,nf:NF,al:{horizontal:"center",wrapText:true}});
@@ -723,6 +726,7 @@ export default function App(){
   const addUnitToCodes=async()=>{ const list=codesMissingUnit; if(!list.length)return;
     if(!confirm(`Add "_unit" to ${list.length} BUR code(s)?\n\ne.g. ${list[0].code}  →  ${codeWithUnit(list[0].code,list[0].unit)}\n\nBOQ rows and Master BQ templates using the old codes will still match.`))return;
     try{ for(let i=0;i<list.length;i+=400){ const batch=writeBatch(db); list.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{code:codeWithUnit(b.code,b.unit)})); await batch.commit(); } toast_(`✅ Updated ${list.length} code(s)`); }catch(e){ toast_("⚠️ "+e.message); } };
+  const bulkSetRound=async v=>{ const ids=[...selBur]; if(!ids.length)return; const val=v===""?null:+v; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{roundUp:val})); await batch.commit();} toast_(`✅ ${val===null?"Exact rate":val===0?"Round up to whole $":"Round up to 1 decimal"} on ${ids.length} item(s)`); clearSel(); };
   const bulkSetUnit=async u=>{ const ids=[...selBur]; if(!ids.length||!u)return; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>{ const b=burItemsRef.current.find(x=>x.id===id); batch.update(doc(db,"bur",id),b&&b.code?{unit:u,code:swapUnitTag(b.code,b.unit,u)}:{unit:u}); }); await batch.commit();} toast_(`✅ Set unit on ${ids.length} item(s)`); clearSel(); };
   const handleDropCat=(cid,e)=>{ e.preventDefault(); const id=e.dataTransfer.getData("text/bur"); if(!id)return; const ids=(selBur.has(id)&&selBur.size>1)?[...selBur]:[id]; moveItemsToCat(ids,cid).then(()=>{toast_(`✅ Moved ${ids.length} item(s)`);clearSel();}); };
   const _codeCount={}; burItems.forEach(b=>{const k=(b.code||"").trim().toLowerCase(); if(k)_codeCount[k]=(_codeCount[k]||0)+1;});
@@ -756,7 +760,7 @@ export default function App(){
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.labour?item.labour:""} onChange={e=>updBur(item.id,{labour:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.material?item.material:""} onChange={e=>updBur(item.id,{material:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.plant?item.plant:""} onChange={e=>updBur(item.id,{plant:+e.target.value||0})}/></td>
-                <td style={{padding:"3px 8px",textAlign:"right",fontWeight:700,color:"#1d4ed8",whiteSpace:"nowrap"}}>{total>0?fmt(total):""}</td>
+                <td style={{padding:"3px 8px",textAlign:"right",fontWeight:700,color:"#1d4ed8",whiteSpace:"nowrap"}}>{total>0?<span title={hasRoundUp(item)?`Rounded up (${+item.roundUp===0?"whole $":"1 decimal"})`:""}>{hasRoundUp(item)&&<span style={{color:"#7c3aed",fontSize:10,marginRight:2}}>↑</span>}{fmt(total)}</span>:""}</td>
                 <td style={{padding:"3px 6px",textAlign:"center"}}><button onClick={()=>{setCostModal(item.id);setCType("subcon");}} style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#92400e",fontWeight:600,whiteSpace:"nowrap"}}>📊{cdCount?` ${cdCount}`:""}</button></td>
                 <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>delBur(item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></td>
               </tr>
@@ -769,6 +773,7 @@ export default function App(){
                   <div><label style={lbl}>SUBCON (S$)</label><input type="number" style={{...inp,width:90}} value={item.subcon?item.subcon:""} onChange={e=>updBur(item.id,{subcon:+e.target.value||0})}/></div>
                   <div><label style={lbl}>OH %</label><input type="number" style={{...inp,width:70}} value={item.oh??15} onChange={e=>updBur(item.id,{oh:+e.target.value||0})}/></div>
                   <div><label style={lbl}>PROFIT %</label><input type="number" style={{...inp,width:70}} value={item.profit??10} onChange={e=>updBur(item.id,{profit:+e.target.value||0})}/></div>
+                  <div><label style={lbl}>ROUND UP RATE</label><select style={{...inp,width:110}} value={hasRoundUp(item)?String(item.roundUp):""} onChange={e=>updBur(item.id,{roundUp:e.target.value===""?null:+e.target.value})}>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
                   <div><label style={lbl}>CATEGORY</label><select style={{...inp,background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
                   <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b> · OH({item.oh}%) <b>S$ {fmt(direct*(+item.oh||0)/100)}</b> · <span style={{color:"#1d4ed8",fontWeight:800}}>Total S$ {fmt(total)}/{item.unit}</span></div>
                 </div>
@@ -994,6 +999,7 @@ export default function App(){
                 <select value="" onChange={e=>{if(e.target.value)bulkMoveCat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Category…</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
                 <span style={{fontSize:11,color:"#475569"}}>Set unit:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkSetUnit(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Unit…</option>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetRound(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Round up…</option>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
                 <button onClick={clearSel} style={{marginLeft:"auto",background:"#fff",border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#5b21b6",fontWeight:600}}>Clear</button>
               </div>}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
