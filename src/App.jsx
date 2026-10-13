@@ -525,10 +525,40 @@ export default function App(){
   },[burItems,cats,toast_,catSort,ccomps]);
 
   // ── BUR writes (per-document in shared library) ─────────────────────────────
-  const addBurItem=useCallback(async catId=>{ const ref=doc(collection(db,"bur")); try{ await setDoc(ref,{pid,catId,code:"",desc:"New Item",unit:"sum",labour:0,material:0,plant:0,subcon:0,oh:15,profit:10,costData:[],quote:null,group:""}); setExpBur(ref.id);}catch(e){toast_("⚠️ "+e.message);} },[pid]);
-  const updBur=useCallback((id,ch)=>{ setBurItems(prev=>prev.map(b=>b.id===id?{...b,...ch}:b)); if(burTimers.current[id])clearTimeout(burTimers.current[id]); burTimers.current[id]=setTimeout(()=>updateDoc(doc(db,"bur",id),ch).catch(()=>{}),600); },[]);
-  const delBur=useCallback(id=>{ if(confirm("Delete this BUR item?"))deleteDoc(doc(db,"bur",id)).catch(()=>{}); },[]);
-  const setBurField=(id,patch)=>{ setBurItems(prev=>prev.map(b=>b.id===id?{...b,...patch}:b)); updateDoc(doc(db,"bur",id),patch).catch(()=>{}); };
+  // ── BUR undo (this browser session only) ─────────────────────────────────────
+  // Each entry remembers how to put things back: {label, kind:"fields", items:[{id,before}]} | {kind:"deleted", docs:[{id,data}]} | {kind:"created", ids:[]}.
+  // Rapid typing in the same field of the same item collapses into one entry, so one Undo reverts the whole edit.
+  const undoRef=useRef([]); const [undoLabel,setUndoLabel]=useState("");
+  const syncUndo=()=>setUndoLabel(undoRef.current.length?undoRef.current[undoRef.current.length-1].label:"");
+  const pushUndo=useCallback(entry=>{ const st=undoRef.current; st.push({...entry,ts:Date.now()}); if(st.length>50)st.shift(); syncUndo(); },[]);
+  const burLabel=id=>{ const b=burItemsRef.current.find(x=>x.id===id); return b?(b.code||b.desc||"item"):"item"; };
+  const snapFields=(id,keys)=>{ const b=burItemsRef.current.find(x=>x.id===id)||{}; const o={}; keys.forEach(k=>{ o[k]=b[k]===undefined?null:JSON.parse(JSON.stringify(b[k])); }); return o; };
+  const recordFields=useCallback((ids,keys,label,coalesce=false)=>{
+    const st=undoRef.current, top=st[st.length-1];
+    if(coalesce&&top&&top.kind==="fields"&&top.items.length===1&&ids.length===1&&top.items[0].id===ids[0]&&top.keys===keys.join(",")&&Date.now()-top.ts<4000){ top.ts=Date.now(); return; }
+    pushUndo({kind:"fields",keys:keys.join(","),label,items:ids.map(id=>({id,before:snapFields(id,keys)}))});
+  },[pushUndo]);
+  const undoLast=useCallback(async()=>{
+    const e=undoRef.current.pop(); syncUndo(); if(!e)return;
+    try{
+      if(e.kind==="fields"){
+        e.items.forEach(({id})=>{ if(burTimers.current[id]){clearTimeout(burTimers.current[id]);delete burTimers.current[id];} if(burTimers.current["cd_"+id]){clearTimeout(burTimers.current["cd_"+id]);delete burTimers.current["cd_"+id];} });
+        setBurItems(prev=>prev.map(b=>{ const it=e.items.find(x=>x.id===b.id); return it?{...b,...it.before}:b; }));
+        for(let i=0;i<e.items.length;i+=400){ const batch=writeBatch(db); e.items.slice(i,i+400).forEach(({id,before})=>batch.update(doc(db,"bur",id),before)); await batch.commit(); }
+      }else if(e.kind==="deleted"){
+        for(let i=0;i<e.docs.length;i+=400){ const batch=writeBatch(db); e.docs.slice(i,i+400).forEach(({id,data})=>batch.set(doc(db,"bur",id),data)); await batch.commit(); }
+      }else if(e.kind==="created"){
+        for(let i=0;i<e.ids.length;i+=400){ const batch=writeBatch(db); e.ids.slice(i,i+400).forEach(id=>batch.delete(doc(db,"bur",id))); await batch.commit(); }
+      }
+      toast_("↶ Undone: "+e.label);
+    }catch(err){ toast_("⚠️ Undo failed: "+(err&&err.message||err)); }
+  },[toast_]);
+  // Ctrl+Z on the BUR tab (when not typing in a box — inside a box Ctrl+Z undoes the typing as usual)
+  useEffect(()=>{ const h=ev=>{ if(tab!=="bur"||!(ev.ctrlKey||ev.metaKey)||ev.key.toLowerCase()!=="z"||ev.shiftKey)return; const t=ev.target, tg=(t&&t.tagName)||""; if(/INPUT|TEXTAREA|SELECT/.test(tg)||(t&&t.isContentEditable))return; ev.preventDefault(); undoLast(); }; window.addEventListener("keydown",h); return ()=>window.removeEventListener("keydown",h); },[tab,undoLast]);
+  const addBurItem=useCallback(async catId=>{ const ref=doc(collection(db,"bur")); try{ await setDoc(ref,{pid,catId,code:"",desc:"New Item",unit:"sum",labour:0,material:0,plant:0,subcon:0,oh:15,profit:10,costData:[],quote:null,group:""}); pushUndo({kind:"created",label:"Add new item",ids:[ref.id]}); setExpBur(ref.id);}catch(e){toast_("⚠️ "+e.message);} },[pid,pushUndo]);
+  const updBur=useCallback((id,ch)=>{ recordFields([id],Object.keys(ch),"Edit "+burLabel(id),true); setBurItems(prev=>prev.map(b=>b.id===id?{...b,...ch}:b)); if(burTimers.current[id])clearTimeout(burTimers.current[id]); burTimers.current[id]=setTimeout(()=>{ delete burTimers.current[id]; updateDoc(doc(db,"bur",id),ch).catch(()=>{}); },600); },[recordFields]);
+  const delBur=useCallback(id=>{ if(!confirm("Delete this BUR item?"))return; const b=burItemsRef.current.find(x=>x.id===id); if(b){ const {id:_i,...data}=b; pushUndo({kind:"deleted",label:"Delete "+(b.code||b.desc||"item"),docs:[{id,data}]}); } deleteDoc(doc(db,"bur",id)).catch(()=>{}); },[pushUndo]);
+  const setBurField=(id,patch)=>{ recordFields([id],Object.keys(patch),"Edit "+burLabel(id)); setBurItems(prev=>prev.map(b=>b.id===id?{...b,...patch}:b)); updateDoc(doc(db,"bur",id),patch).catch(()=>{}); };
 
   const loadMaster=useCallback(async()=>{
     if(!confirm(`Replace the entire BUR library with the master list?\n\nThis clears the current ${burItems.length} item(s) and loads ${burSeed.items.length} fresh items filed under their ${burSeed.cats.length} categories (from the Excel). Use this to reset / remove duplicates.`))return;
@@ -559,6 +589,7 @@ export default function App(){
         for(const r of CATEGORY_RULES){ if(r.kw.some(k=>text.includes(k))){cat=r.cat;break;} }
         if(b.catId!==cat)updates.push([b.id,cat]);
       }
+      if(updates.length)recordFields(updates.map(u=>u[0]),["catId"],`Auto-sort ${updates.length} items`);
       for(let i=0;i<updates.length;i+=400){ const batch=writeBatch(db); updates.slice(i,i+400).forEach(([id,cat])=>batch.update(doc(db,"bur",id),{catId:cat})); await batch.commit(); }
       toast_(`✅ Sorted ${updates.length} items into categories`); addLogEntry(`Auto-sorted ${updates.length} BUR items into categories`);
     }catch(e){toast_("⚠️ "+e.message);}
@@ -572,8 +603,8 @@ export default function App(){
     const rows=[];
     for(let i=start;i<lines.length;i++){ const c=lines[i].split("\t"); const desc=(c[0]||"").trim(),unit=(c[1]||"").trim(),code=(c[2]||"").trim(); const rate=parseFloat(String(c[3]||"").replace(/[^0-9.\-]/g,""))||0; if(!desc&&!code)continue; rows.push({pid,catId:pasteCat,code:codeWithUnit(code,unit||"sum"),desc:desc||"(no description)",unit:unit||"sum",labour:0,material:rate,plant:0,subcon:0,oh:0,profit:0,costData:[],quote:null,group:"Pasted"}); }
     if(!rows.length){toast_("⚠️ No rows parsed — expected: Description, Unit, Code, Rate");return;}
-    try{ let batch=writeBatch(db),n=0; for(const r of rows){ batch.set(doc(collection(db,"bur")),r); n++; if(n%400===0){await batch.commit();batch=writeBatch(db);} } await batch.commit(); setPasteOpen(false);setPasteText("");setSelCat(pasteCat); toast_(`✅ Imported ${rows.length} items`);}catch(e){toast_("⚠️ "+e.message);}
-  },[pasteText,pasteCat,toast_,pid]);
+    try{ let batch=writeBatch(db),n=0; const newIds=[]; for(const r of rows){ const ref=doc(collection(db,"bur")); newIds.push(ref.id); batch.set(ref,r); n++; if(n%400===0){await batch.commit();batch=writeBatch(db);} } await batch.commit(); pushUndo({kind:"created",label:`Paste ${rows.length} items`,ids:newIds}); setPasteOpen(false);setPasteText("");setSelCat(pasteCat); toast_(`✅ Imported ${rows.length} items`);}catch(e){toast_("⚠️ "+e.message);}
+  },[pasteText,pasteCat,toast_,pid,pushUndo]);
 
   // ── Cost data / quotes ──────────────────────────────────────────────────────
   const modalItem=costModal?burItems.find(b=>b.id===costModal):null;
@@ -586,7 +617,7 @@ export default function App(){
   const pickCostImg=useCallback(async files=>{ const list=files&&files.length!=null?[...files]:(files?[files]:[]); if(!list.length)return; const out=[]; for(const file of list){ const d=await imgToDataURL(file); if(d&&d.length<=1400000)out.push(d); else if(d)toast_("⚠️ One image too large, skipped"); } if(out.length)setCForm(f=>({...f,imgs:[...(f.imgs||[]),...out]})); },[toast_]);
   const delCostEntry=useCallback(eid=>{ const b=burItems.find(x=>x.id===costModal); if(!b)return; setBurField(costModal,{costData:(b.costData||[]).filter(e=>e.id!==eid)}); },[costModal,burItems]);
   // Edit an existing cost-data entry (optimistic local + debounced save)
-  const updCostEntry=useCallback((eid,ch)=>{ setBurItems(prev=>prev.map(b=>b.id===costModal?{...b,costData:(b.costData||[]).map(e=>e.id===eid?{...e,...ch}:e)}:b)); const k="cd_"+costModal; if(burTimers.current[k])clearTimeout(burTimers.current[k]); burTimers.current[k]=setTimeout(()=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(b)updateDoc(doc(db,"bur",costModal),{costData:b.costData}).catch(()=>{}); },600); },[costModal]);
+  const updCostEntry=useCallback((eid,ch)=>{ recordFields([costModal],["costData"],"Edit cost data of "+burLabel(costModal),true); setBurItems(prev=>prev.map(b=>b.id===costModal?{...b,costData:(b.costData||[]).map(e=>e.id===eid?{...e,...ch}:e)}:b)); const k="cd_"+costModal; if(burTimers.current[k])clearTimeout(burTimers.current[k]); burTimers.current[k]=setTimeout(()=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(b)updateDoc(doc(db,"bur",costModal),{costData:b.costData}).catch(()=>{}); },600); },[costModal]);
   const entryPhotos=e=>e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[]);
   const addEntryPhotos=useCallback(async(eid,files)=>{ const list=files&&files.length!=null?[...files]:(files?[files]:[]); if(!list.length)return; const out=[]; for(const f of list){ const d=await imgToDataURL(f); if(d&&d.length<=1400000)out.push(d); else if(d)toast_("⚠️ One image too large, skipped"); } if(!out.length)return; const b=burItemsRef.current.find(x=>x.id===costModal); const e=b&&(b.costData||[]).find(x=>x.id===eid); const cur=e?entryPhotos(e):[]; updCostEntry(eid,{imgs:[...cur,...out],img:""}); },[costModal,updCostEntry,toast_]);
   const removeEntryPhoto=useCallback((eid,idx)=>{ const b=burItemsRef.current.find(x=>x.id===costModal); const e=b&&(b.costData||[]).find(x=>x.id===eid); if(!e)return; updCostEntry(eid,{imgs:entryPhotos(e).filter((_,j)=>j!==idx),img:""}); },[costModal,updCostEntry]);
@@ -689,7 +720,7 @@ export default function App(){
   const delCat=cid=>{ const n=burItems.filter(b=>b.catId===cid).length; if(n>0){alert(`This category has ${n} item(s). Move them to another category first (open an item → CATEGORY), then delete.`);return;} if(confirm("Delete this empty category?")){ pushCats(cats.filter(x=>x.id!==cid)); if(selCat===cid){const o=cats.find(x=>x.id!==cid); setSelCat(o?o.id:"");} } };
   const toggleSel=id=>setSelBur(prev=>{const s=new Set(prev); s.has(id)?s.delete(id):s.add(id); return s;});
   const clearSel=()=>setSelBur(new Set());
-  const moveItemsToCat=async(ids,cid)=>{ if(!ids.length||!cid)return; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{catId:cid})); await batch.commit();} };
+  const moveItemsToCat=async(ids,cid)=>{ if(!ids.length||!cid)return; recordFields(ids,["catId"],`Move ${ids.length} item(s) to ${catName(cid)}`); for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{catId:cid})); await batch.commit();} };
   const bulkMoveCat=async cid=>{ const ids=[...selBur]; if(!ids.length||!cid)return; await moveItemsToCat(ids,cid); toast_(`✅ Moved ${ids.length} item(s)`); clearSel(); };
   // Replace this project's whole BUR library with the items in a master BUR workbook (layout of BUR.xlsx).
   // Downloads a JSON backup of the current items first, and only deletes after the user confirms the counts.
@@ -723,11 +754,11 @@ export default function App(){
   };
   // One-off: append "_unit" to every BUR code in this project that doesn't already end with it.
   const codesMissingUnit=burItems.filter(b=>b.code&&codeWithUnit(b.code,b.unit)!==String(b.code).trim());
-  const addUnitToCodes=async()=>{ const list=codesMissingUnit; if(!list.length)return;
+  const addUnitToCodes=async()=>{ const list=codesMissingUnit; if(!list.length)return; const _u=()=>recordFields(list.map(b=>b.id),["code"],`Add _unit to ${list.length} codes`);
     if(!confirm(`Add "_unit" to ${list.length} BUR code(s)?\n\ne.g. ${list[0].code}  →  ${codeWithUnit(list[0].code,list[0].unit)}\n\nBOQ rows and Master BQ templates using the old codes will still match.`))return;
-    try{ for(let i=0;i<list.length;i+=400){ const batch=writeBatch(db); list.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{code:codeWithUnit(b.code,b.unit)})); await batch.commit(); } toast_(`✅ Updated ${list.length} code(s)`); }catch(e){ toast_("⚠️ "+e.message); } };
-  const bulkSetRound=async v=>{ const ids=[...selBur]; if(!ids.length)return; const val=v===""?null:+v; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{roundUp:val})); await batch.commit();} toast_(`✅ ${val===null?"Exact rate":val===0?"Round up to whole $":"Round up to 1 decimal"} on ${ids.length} item(s)`); clearSel(); };
-  const bulkSetUnit=async u=>{ const ids=[...selBur]; if(!ids.length||!u)return; for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>{ const b=burItemsRef.current.find(x=>x.id===id); batch.update(doc(db,"bur",id),b&&b.code?{unit:u,code:swapUnitTag(b.code,b.unit,u)}:{unit:u}); }); await batch.commit();} toast_(`✅ Set unit on ${ids.length} item(s)`); clearSel(); };
+    try{ _u(); for(let i=0;i<list.length;i+=400){ const batch=writeBatch(db); list.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{code:codeWithUnit(b.code,b.unit)})); await batch.commit(); } toast_(`✅ Updated ${list.length} code(s)`); }catch(e){ toast_("⚠️ "+e.message); } };
+  const bulkSetRound=async v=>{ const ids=[...selBur]; if(!ids.length)return; const val=v===""?null:+v; recordFields(ids,["roundUp"],`Round-up on ${ids.length} item(s)`); for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{roundUp:val})); await batch.commit();} toast_(`✅ ${val===null?"Exact rate":val===0?"Round up to whole $":"Round up to 1 decimal"} on ${ids.length} item(s)`); clearSel(); };
+  const bulkSetUnit=async u=>{ const ids=[...selBur]; if(!ids.length||!u)return; recordFields(ids,["unit","code"],`Set unit on ${ids.length} item(s)`); for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>{ const b=burItemsRef.current.find(x=>x.id===id); batch.update(doc(db,"bur",id),b&&b.code?{unit:u,code:swapUnitTag(b.code,b.unit,u)}:{unit:u}); }); await batch.commit();} toast_(`✅ Set unit on ${ids.length} item(s)`); clearSel(); };
   const handleDropCat=(cid,e)=>{ e.preventDefault(); const id=e.dataTransfer.getData("text/bur"); if(!id)return; const ids=(selBur.has(id)&&selBur.size>1)?[...selBur]:[id]; moveItemsToCat(ids,cid).then(()=>{toast_(`✅ Moved ${ids.length} item(s)`);clearSel();}); };
   const _codeCount={}; burItems.forEach(b=>{const k=(b.code||"").trim().toLowerCase(); if(k)_codeCount[k]=(_codeCount[k]||0)+1;});
   const isDupCode=code=>{const k=(code||"").trim().toLowerCase(); return !!k&&_codeCount[k]>1;};
@@ -981,6 +1012,7 @@ export default function App(){
                 {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
                 <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
                 {codesMissingUnit.length>0&&<button onClick={addUnitToCodes} title="Append _unit to BUR codes (e.g. Acoustic_feltCeiling → Acoustic_feltCeiling_m2)" style={{background:"#fff7ed",color:"#c2410c",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>+ _unit to {codesMissingUnit.length} codes</button>}
+                {undoLabel&&<button onClick={undoLast} title={"Undo: "+undoLabel+" (Ctrl+Z)"} style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",maxWidth:260,overflow:"hidden",textOverflow:"ellipsis"}}>↶ Undo: {undoLabel}</button>}
                 <label title="Clear this project's BUR and load all items from a master BUR.xlsx (a backup downloads first)" style={{background:"#fef2f2",color:"#b91c1c",border:"1px solid #fca5a5",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⟳ Replace BUR from Excel…<input type="file" accept=".xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files[0]; e.target.value=""; replaceBurFromExcel(f);}}/></label>
                 <button onClick={exportBUR} style={{background:"#15803d",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⤓ Export Excel</button>
               </div>
