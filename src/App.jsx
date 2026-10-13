@@ -11,7 +11,7 @@ const UNITS=["m²","m³","m","nr","sum","lot","kg","t","m run","%","item"];
 const STATUSES=["Draft","Under Review","Confirmed"];
 const SS={Draft:{bg:"#f1f5f9",c:"#475569"},"Under Review":{bg:"#fef9c3",c:"#b45309"},Confirmed:{bg:"#dcfce7",c:"#15803d"}};
 const ROLES=["Lead QS","Estimator","PM","Client"];
-const TABS=[{id:"boq",label:"📋 BOQ"},{id:"bur",label:"📚 BUR"},{id:"summary",label:"📊 Summary"},{id:"log",label:"📝 Activity"}];
+const TABS=[{id:"boq",label:"📋 BOQ"},{id:"bur",label:"📚 BUR"},{id:"compare",label:"🆚 Compare Quotes"},{id:"summary",label:"📊 Summary"},{id:"log",label:"📝 Activity"}];
 const ALL_COLS=[{id:"ref",label:"Ref",w:48},{id:"desc",label:"Description",w:190},{id:"unit",label:"Unit",w:64},{id:"qty",label:"Qty",w:56,num:1},{id:"rA",label:"Rate A",w:74,num:1},{id:"amtA",label:"Amt A (S$)",w:100,num:1},{id:"rB",label:"Rate B",w:74,num:1},{id:"amtB",label:"Amt B (S$)",w:100,num:1},{id:"code",label:"BUR Code",w:90},{id:"remarks",label:"Remarks",w:130},{id:"by",label:"By",w:56}];
 const DEF_COLS=new Set(["ref","desc","unit","qty","rA","amtA","rB","amtB","code","remarks","by"]);
 const DEF_CODES=[{id:"dc1",code:"PRELIM",desc:"Preliminaries",cat:"Prelim"},{id:"dc2",code:"BLDG-A",desc:"Building Works Phase A",cat:"Building"},{id:"dc3",code:"BLDG-B",desc:"Building Works Phase B",cat:"Building"},{id:"dc4",code:"EXT-A",desc:"External Works Phase A",cat:"External"},{id:"dc5",code:"EXT-B",desc:"External Works Phase B",cat:"External"},{id:"dc6",code:"ME-ACMV",desc:"Air Conditioning & Mech Ventilation",cat:"M&E"},{id:"dc7",code:"ME-ELV",desc:"Electrical & Low Voltage",cat:"M&E"},{id:"dc8",code:"ME-FP",desc:"Fire Protection",cat:"M&E"},{id:"dc9",code:"ME-STP",desc:"Sewage Treatment Plant",cat:"M&E"},{id:"dc10",code:"FEES",desc:"Professional Fees",cat:"Fees"}];
@@ -34,6 +34,37 @@ const CATEGORY_RULES=[
 ];
 const COMPS=["labour","material","plant","subcon"];
 const CLABEL={labour:"Labour",material:"Material",plant:"Plant",subcon:"Subcon / Supplier"};
+
+// ── Quote comparison (QS-style side-by-side subcontractor bid comparison) ──
+const CMP_STATUSES=["normal","incl","norate","excluded"];
+const CMP_STATUS_LABEL={normal:"Priced",incl:"Incl",norate:"No Rate",excluded:"Excl"};
+const QTY_MISMATCH_PCT=0.05;   // qty differs from WH qty by more than this fraction -> flag
+const OUTLIER_PCT=0.25;        // rate differs from the row's median priced rate by more than this fraction -> flag
+const SEV_COLOR={High:{bg:"#fecaca",c:"#991b1b"},Medium:{bg:"#fed7aa",c:"#9a3412"},Low:{bg:"#fef08a",c:"#854d0e"}};
+const newComparison=()=>({project:"",trade:"",reference:"",preparedDate:"",bidders:[],sections:[],commercialTerms:{},riskFlags:[],ts:Date.now()});
+const newCmpItem=()=>({id:uid(),no:"",desc:"New item",unit:"no",whQty:"",bidders:{}});
+const cmpBidderCell=(item,name)=>item.bidders[name]||{qty:"",rate:"",status:"normal",remarks:""};
+const median=arr=>{if(!arr.length)return null;const s=[...arr].sort((a,b)=>a-b),m=Math.floor(s.length/2);return s.length%2?s[m]:(s[m-1]+s[m])/2;};
+// Returns the numeric amount for a bidder on an item (whQty x rate), or null if not computable (incl/norate/excluded/no rate/no whQty).
+const cmpAmount=(item,name)=>{const b=cmpBidderCell(item,name);if(b.status!=="normal")return null;const wq=+item.whQty,r=+b.rate;if(!wq||!b.rate)return null;return wq*r;};
+// Computes per-item-per-bidder auto flags (qty mismatch / outlier rate) without mutating anything.
+const cmpAutoFlags=(section,bidders)=>{
+  const flags={}; // flags[itemId] = { [bidderName]: {qty:bool, rate:bool} }
+  section.items.forEach(item=>{
+    const wq=+item.whQty||0;
+    const priced=bidders.map(name=>({name,rate:+cmpBidderCell(item,name).rate})).filter(x=>cmpBidderCell(item,x.name).status==="normal"&&x.rate>0);
+    const med=median(priced.map(x=>x.rate));
+    const f={};
+    bidders.forEach(name=>{
+      const b=cmpBidderCell(item,name);
+      const qtyFlag=wq>0&&b.qty!==""&&b.qty!=null&&Math.abs((+b.qty-wq)/wq)>QTY_MISMATCH_PCT;
+      const rateFlag=med&&b.status==="normal"&&+b.rate>0&&Math.abs((+b.rate-med)/med)>OUTLIER_PCT;
+      f[name]={qty:!!qtyFlag,rate:!!rateFlag};
+    });
+    flags[item.id]=f;
+  });
+  return flags;
+};
 
 const newSections=()=>SECTIONS.map(s=>({...s,items:[]}));
 const fmt=n=>(n||0).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -115,7 +146,16 @@ export default function App(){
   const [toast,setToast]=useState(null);
   const [bqTplB64,setBqTplB64]=useState(null); const [bqTplName,setBqTplName]=useState(""); const [bqResult,setBqResult]=useState(null);
 
+  const [comparisons,setComparisons]=useState([]);
+  const [selCompId,setSelCompId]=useState(null);
+  const [newBidderName,setNewBidderName]=useState("");
+  const [newFlag,setNewFlag]=useState({severity:"Medium",type:"",item:"",bidder:"",detail:""});
+
   const sTimer=useRef(null); const uRef=useRef(null); const pidRef=useRef(null); const dirtyRef=useRef(false); const pendingRef=useRef(null); const logRef=useRef([]); const burTimers=useRef({});
+  // Compare Quotes: same optimistic-edit + debounce idea as the BOQ project doc (writeProject/updItem above),
+  // but scoped to whichever single comparison is currently open — cmpDirtyRef guards only that one id against
+  // being clobbered by our own collection-wide onSnapshot while a debounced write is in flight.
+  const cmpTimer=useRef(null); const cmpDirtyRef=useRef(null); const cmpPendingRef=useRef(null);
   const burDragRef=useRef(null); const burColWRef=useRef(burColW); useEffect(()=>{burColWRef.current=burColW;},[burColW]);
   const burItemsRef=useRef([]); useEffect(()=>{burItemsRef.current=burItems;});
   useEffect(()=>{ const mm=e=>{ const d=burDragRef.current; if(!d)return; const w=Math.max(40,d.startW+(e.clientX-d.start)); setBurColW(p=>({...p,[d.k]:w})); }; const mu=()=>{ if(burDragRef.current){ try{localStorage.setItem("burColW",JSON.stringify(burColWRef.current));}catch{} burDragRef.current=null; } }; window.addEventListener("mousemove",mm); window.addEventListener("mouseup",mu); return ()=>{window.removeEventListener("mousemove",mm);window.removeEventListener("mouseup",mu);}; },[]);
@@ -163,6 +203,12 @@ export default function App(){
     if(legacy.length&&!migratedRef.current){ migratedRef.current=true; try{ for(let i=0;i<legacy.length;i+=400){ const batch=writeBatch(db); legacy.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{pid})); await batch.commit(); } }catch{} }
   }); },[ready,pid]);
 
+  useEffect(()=>{ if(!ready||!pid)return; return onSnapshot(collection(db,"comparisons"),snap=>{
+    const all=snap.docs.map(d=>({id:d.id,...d.data()})).filter(c=>c.pid===pid);
+    // Keep our own in-flight edit on screen instead of the (stale, pre-write) server copy for that one doc.
+    if(cmpDirtyRef.current&&cmpPendingRef.current){ const i=all.findIndex(c=>c.id===cmpDirtyRef.current); if(i>=0)all[i]=cmpPendingRef.current; }
+    setComparisons(all); setSelCompId(prev=>prev&&all.some(c=>c.id===prev)?prev:(all[0]?.id||null));
+  }); },[ready,pid]);
   useEffect(()=>{ if(!ready)return; const ref=doc(db,"meta","codes"); return onSnapshot(ref,s=>{ if(s.exists())setCodes(s.data().list||[]); else{setCodes(DEF_CODES);setDoc(ref,{list:DEF_CODES}).catch(()=>{});} }); },[ready]);
   useEffect(()=>{ if(!ready)return; const ref=doc(db,"meta","cats"); return onSnapshot(ref,s=>{ if(s.exists())setCats(s.data().list||[]); else{setCats(DEF_CATS);setDoc(ref,{list:DEF_CATS}).catch(()=>{});} }); },[ready]);
   // Keep the selected category valid when the category list changes (e.g. after loading the master list).
@@ -173,6 +219,67 @@ export default function App(){
   useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","ccomps"),s=>setCcomps(s.exists()?(s.data().list||[]):[])); },[ready]);
   const addComponentTab=async()=>{ const name=prompt("New cost-data tab name (e.g. Equipment, Transport, Specialist):"); if(!name||!name.trim())return; const key="cc_"+Math.random().toString(36).slice(2,8); try{await setDoc(doc(db,"meta","ccomps"),{list:[...ccomps,{key,label:name.trim()}]});setCType(key);}catch(e){toast_("⚠️ "+e.message);} };
   const delComponentTab=async key=>{ if(!confirm("Remove this tab? Existing entries stay in the data but the tab is hidden."))return; try{await setDoc(doc(db,"meta","ccomps"),{list:ccomps.filter(c=>c.key!==key)});}catch{} if(cType===key)setCType("subcon"); };
+
+  // ── Quote comparison ops ────────────────────────────────────────────────────
+  const selComp=comparisons.find(c=>c.id===selCompId)||null;
+  // Structural changes (add/remove section, bidder, item) write immediately; per-keystroke edits
+  // (rate/qty/remarks) go through this debounced path, same shape as writeProject/updItem for BOQ.
+  const writeComp=nd=>{ if(!nd?.id)return; const {id,...rest}=nd; setDoc(doc(db,"comparisons",id),rest,{merge:true}).catch(()=>{}); };
+  const pushComp=useCallback(nd=>{ cmpDirtyRef.current=null; cmpPendingRef.current=null; setComparisons(prev=>prev.map(c=>c.id===nd.id?nd:c)); writeComp(nd); },[]);
+  const updComp=useCallback(patch=>{
+    if(!selComp)return;
+    cmpDirtyRef.current=selComp.id;
+    setComparisons(prev=>prev.map(c=>{ if(c.id!==selComp.id)return c; const nd={...c,...patch,ts:Date.now()}; cmpPendingRef.current=nd; return nd; }));
+    if(cmpTimer.current)clearTimeout(cmpTimer.current);
+    cmpTimer.current=setTimeout(()=>{ const nd=cmpPendingRef.current; if(nd){ writeComp(nd); cmpDirtyRef.current=null; cmpPendingRef.current=null; } },700);
+  },[selComp]);
+  const addComparison=useCallback(async()=>{
+    if(!pid)return;
+    const ref=doc(collection(db,"comparisons"));
+    try{ await setDoc(ref,{...newComparison(),pid}); setSelCompId(ref.id); addLogEntry("Created a new quote comparison"); }catch(e){toast_("⚠️ "+e.message);}
+  },[pid,addLogEntry,toast_]);
+  const delComparison=useCallback(id=>{ if(!confirm("Delete this comparison? This cannot be undone."))return; deleteDoc(doc(db,"comparisons",id)).catch(e=>toast_("⚠️ "+e.message)); if(selCompId===id)setSelCompId(null); },[selCompId,toast_]);
+  const addBidder=useCallback(()=>{ const name=newBidderName.trim(); if(!name||!selComp||selComp.bidders.includes(name))return; updComp({bidders:[...selComp.bidders,name]}); setNewBidderName(""); },[newBidderName,selComp,updComp]);
+  const removeBidder=useCallback(name=>{
+    if(!selComp)return; if(!confirm(`Remove ${name} from this comparison? Their quoted rates/qty on every item will be lost.`))return;
+    const sections=selComp.sections.map(s=>({...s,items:s.items.map(it=>{const b={...it.bidders};delete b[name];return{...it,bidders:b};})}));
+    const ct={...selComp.commercialTerms};delete ct[name];
+    updComp({bidders:selComp.bidders.filter(b=>b!==name),sections,commercialTerms:ct,riskFlags:selComp.riskFlags.filter(f=>f.bidder!==name)});
+  },[selComp,updComp]);
+  const addSection=useCallback(()=>{ if(!selComp)return; updComp({sections:[...selComp.sections,{id:uid(),name:"New Section",items:[]}]}); },[selComp,updComp]);
+  const delSection=useCallback(sid=>{ if(!selComp||!confirm("Delete this section and all its items?"))return; updComp({sections:selComp.sections.filter(s=>s.id!==sid)}); },[selComp,updComp]);
+  const renameSection=useCallback((sid,name)=>{ if(!selComp)return; updComp({sections:selComp.sections.map(s=>s.id===sid?{...s,name}:s)}); },[selComp,updComp]);
+  const addCmpItem=useCallback(sid=>{ if(!selComp)return; updComp({sections:selComp.sections.map(s=>s.id===sid?{...s,items:[...s.items,newCmpItem()]}:s)}); },[selComp,updComp]);
+  const delCmpItem=useCallback((sid,iid)=>{ if(!selComp)return; updComp({sections:selComp.sections.map(s=>s.id===sid?{...s,items:s.items.filter(i=>i.id!==iid)}:s)}); },[selComp,updComp]);
+  const updCmpItem=useCallback((sid,iid,patch)=>{ if(!selComp)return; updComp({sections:selComp.sections.map(s=>s.id===sid?{...s,items:s.items.map(i=>i.id===iid?{...i,...patch}:i)}:s)}); },[selComp,updComp]);
+  const updCmpBidderCell=useCallback((sid,iid,name,patch)=>{
+    if(!selComp)return;
+    updComp({sections:selComp.sections.map(s=>s.id===sid?{...s,items:s.items.map(i=>i.id===iid?{...i,bidders:{...i.bidders,[name]:{...cmpBidderCell(i,name),...patch}}}:i)}:s)});
+  },[selComp,updComp]);
+  const updCommercialTerm=useCallback((name,patch)=>{ if(!selComp)return; updComp({commercialTerms:{...selComp.commercialTerms,[name]:{...(selComp.commercialTerms[name]||{}),...patch}}}); },[selComp,updComp]);
+  const addRiskFlag=useCallback(()=>{ if(!selComp||!newFlag.type.trim()||!newFlag.detail.trim())return; updComp({riskFlags:[...selComp.riskFlags,{id:uid(),...newFlag}]}); setNewFlag({severity:"Medium",type:"",item:"",bidder:"",detail:""}); },[selComp,newFlag,updComp]);
+  const delRiskFlag=useCallback(fid=>{ if(!selComp)return; updComp({riskFlags:selComp.riskFlags.filter(f=>f.id!==fid)}); },[selComp,updComp]);
+
+  // Per-bidder grand total across every section (null-amount items excluded, so an all-unpriced bidder totals 0 rather than looking cheapest).
+  const cmpBidderTotal=useCallback((comp,name)=>comp.sections.reduce((sum,s)=>sum+s.items.reduce((t,i)=>t+(cmpAmount(i,name)||0),0),0),[]);
+  const cmpUnpricedCount=useCallback((comp,name)=>comp.sections.reduce((n,s)=>n+s.items.filter(i=>{const b=cmpBidderCell(i,name);return b.status==="norate"||(b.status==="normal"&&!(+i.whQty&&+b.rate));}).length,0),[]);
+  const exportComparisonCSV=useCallback(comp=>{
+    const rows=[["Project",comp.project],["Trade",comp.trade],[]];
+    const header=["No","Description","Unit","WH Qty",...comp.bidders.flatMap(b=>[`${b} Qty`,`${b} Rate`,`${b} Amount`,`${b} Remarks`])];
+    rows.push(header);
+    comp.sections.forEach(s=>{
+      rows.push([s.name]);
+      s.items.forEach(i=>{
+        const row=[i.no,i.desc,i.unit,i.whQty];
+        comp.bidders.forEach(name=>{const b=cmpBidderCell(i,name);const amt=cmpAmount(i,name);row.push(b.qty,b.rate,amt!=null?amt.toFixed(2):CMP_STATUS_LABEL[b.status],b.remarks);});
+        rows.push(row);
+      });
+    });
+    rows.push([]); rows.push(["TOTAL",...comp.bidders.flatMap(b=>["","",cmpBidderTotal(comp,b).toFixed(2),""])]);
+    const csv=rows.map(r=>r.map(v=>{const s=String(v??"");return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;}).join(",")).join("\n");
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`Comparison_${(comp.trade||comp.project||"quotes").replace(/[^a-z0-9]+/gi,"_")}.csv`; a.click(); URL.revokeObjectURL(a.href);
+  },[cmpBidderTotal]);
 
   // Current project's BOQ
   useEffect(()=>{ if(!ready||!pid){setData(null);return;} return onSnapshot(doc(db,"projects",pid),s=>{ if(!s.exists())return; if(dirtyRef.current)return; const d=s.data(); setData({sections:d.sections||newSections(),cols:d.cols||[],ts:d.ts||0}); }); },[ready,pid]);
@@ -297,50 +404,81 @@ export default function App(){
     }catch(e){ toast_("⚠️ Import failed: "+(e&&e.message||e)); }
   },[data,pid,pushData,toast_]);
 
-  // Build the BUR export from LIVE data, grouped by category, formatted like the master build-up sheet.
+  // Build the BUR export from LIVE data in the same layout as the master BUR.xlsx:
+  // B Description | C Unit | D Code | E Rate (purple) | F Amt | H Quote | K Labour | L Material | M Plant | N OH% | O Profit% | R+ one column per supplier.
+  // Each category gets an orange heading row that also carries that category's supplier names (with quote date) above its rate columns.
   const exportBUR=useCallback(async()=>{
     try{
       toast_("⏳ Building BUR Excel…");
       const ExcelJS=(await import("exceljs")).default;
-      const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("BUILD UP RATES");
-      const bd={top:{style:"thin",color:{argb:"FFBFBFBF"}},left:{style:"thin",color:{argb:"FFBFBFBF"}},bottom:{style:"thin",color:{argb:"FFBFBFBF"}},right:{style:"thin",color:{argb:"FFBFBFBF"}}};
-      const headers=["Description","Unit","Code","Labour","Material","Plant","Subcon","Rate","Sub-Con Quotes"];
-      ws.columns=[{width:50},{width:8},{width:22},{width:10},{width:11},{width:9},{width:11},{width:12},{width:55}];
-      const moneyCols=new Set([4,5,6,7,8]);
+      const wb=new ExcelJS.Workbook(); wb.calcProperties.fullCalcOnLoad=true; const ws=wb.addWorksheet("BUR");
+      const F={name:"Arial",size:10}; const NF='_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)';
+      const thin={style:"thin"}; const bd={top:thin,left:thin,bottom:thin,right:thin};
+      const fill=argb=>({type:"pattern",pattern:"solid",fgColor:{argb}});
+      const C_HEAD="FFFFFF00",C_CAT="FFFFC000",C_SUPHDR="FFFFFFCC",C_RATE="FFCC99FF",C_QUOTE="FFCCFFFF",C_SEL="FFA6C9EC",C_OTHER="FFFFCCFF",C_CODE="FFCCFF99";
+      const SUP0=18; // column R
+      const L=n=>{let s="";while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=Math.floor((n-1)/26);}return s;};
+      const put=(r,c,v,o={})=>{ const cell=ws.getCell(r,c); cell.value=v; cell.font={...F,...(o.font||{})}; cell.alignment={vertical:"top",...(o.al||{})}; if(o.fill)cell.fill=fill(o.fill); if(o.nf)cell.numFmt=o.nf; if(o.bd)cell.border=bd; return cell; };
       const codeCount={}; burItems.forEach(b=>{const k=(b.code||"").trim().toLowerCase(); if(k)codeCount[k]=(codeCount[k]||0)+1;});
-      // group by category
+      // group by category (same order as the sidebar)
       const groups=[]; const known=new Set();
       const orderedCats=catSort==="none"?cats:[...cats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
       for(const cat of orderedCats){ known.add(cat.id); const items=burItems.filter(b=>b.catId===cat.id).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(items.length)groups.push({name:cat.name,items}); }
       const orphan=burItems.filter(b=>!known.has(b.catId)).sort((a,b)=>(a.code||"").localeCompare(b.code||"")); if(orphan.length)groups.push({name:"(Uncategorised)",items:orphan});
-      ws.mergeCells(1,1,1,headers.length); const t=ws.getCell(1,1); t.value="BUILD UP RATES"; t.font={bold:true,size:14,color:{argb:"FF1E3A5F"}};
-      const hr=ws.getRow(2); headers.forEach((h,i)=>{ const c=hr.getCell(i+1); c.value=h; c.font={bold:true}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}}; c.border=bd; c.alignment={horizontal:(i>=3&&i<=7)?"right":"left",vertical:"middle",wrapText:true}; }); hr.height=22;
-      { const pc=ws.getCell(2,headers.length+1); pc.value="Photos"; pc.font={bold:true}; pc.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF200"}}; pc.border=bd; }
-      for(let c=headers.length+1;c<=headers.length+12;c++)ws.getColumn(c).width=18;
-      const PAL=["FFFDE68A","FFBFDBFE","FFBBF7D0","FFFBCFE8","FFDDD6FE","FFFED7AA","FFA5F3FC","FFE9D5FF","FFFEF08A","FFD9F99D","FFFECACA","FFC7D2FE","FFFCD34D","FF99F6E4"];
-      const tint=hex=>{ const r=parseInt(hex.slice(2,4),16),g=parseInt(hex.slice(4,6),16),b=parseInt(hex.slice(6,8),16); const m=x=>Math.round(x+(255-x)*0.62).toString(16).padStart(2,"0"); return "FF"+m(r)+m(g)+m(b); };
-      let r=3, count=0, photoCount=0;
-      for(let gi=0;gi<groups.length;gi++){ const g=groups[gi]; const band=PAL[gi%PAL.length]; const rowTint=tint(band);
-        ws.mergeCells(r,1,r,headers.length+12); const cc=ws.getCell(r,1); cc.value=g.name+"   ("+g.items.length+")"; cc.font={bold:true,size:12,color:{argb:"FF1E293B"}}; cc.fill={type:"pattern",pattern:"solid",fgColor:{argb:band}}; cc.border=bd; ws.getRow(r).height=20; r++;
-        for(let j=0;j<g.items.length;j++){ const it=g.items[j]; const fillArgb=(j%2===1)?rowTint:"FFFFFFFF";
-          const q=(it.costData||[]).filter(e=>e.component==="subcon").map(e=>`${e.supplier}: ${e.rate}${e.location?` @${e.location}`:""}${e.date?` (${e.date})`:""}`).join("  |  ");
-          const total=+bTot(it)||0;
-          const vals=[it.desc||"",it.unit||"",it.code||"",+it.labour||0,+it.material||0,+it.plant||0,+it.subcon||0,total,q];
+      // per category: one column per supplier (case-insensitive); when an item has several entries from one supplier, the latest dated one is shown
+      let maxSup=0;
+      groups.forEach(g=>{ const sups=[]; const idx={};
+        g.items.forEach(it=>(it.costData||[]).forEach(e=>{ const nm=String(e.supplier||"").trim(); if(!nm)return; const k=nm.toLowerCase(); if(!(k in idx)){idx[k]=sups.length;sups.push({name:nm,dates:new Set()});} if(e.date)sups[idx[k]].dates.add(e.date); }));
+        g.sups=sups; g.supIdx=idx; maxSup=Math.max(maxSup,sups.length); });
+      const photoCol=SUP0+Math.max(maxSup,4)+1;
+      // column widths copied from the master sheet
+      const W={1:15,2:52,3:6,4:45,5:17.6,6:16.9,7:1.6,8:15.7,9:8.4,10:15.9,11:12,12:12,13:12,14:9,15:9,16:16,17:16};
+      for(let c=1;c<photoCol+12;c++) ws.getColumn(c).width=W[c]||18.2;
+      put(1,1,"Exported "+new Date().toLocaleDateString("en-SG",{day:"numeric",month:"short",year:"numeric"}),{font:{bold:true}});
+      put(3,1,"BUILD UP RATES",{font:{underline:true}});
+      const HEAD=[[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[8,"Quote","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"OH %","center"],[15,"Profit %","center"],[SUP0,"Subcon / Supplier","center"]];
+      HEAD.forEach(([c,t,h])=>put(5,c,t,{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:h,wrapText:true}}));
+      put(5,photoCol,"Photos",{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:"center"}});
+      let r=7, count=0, photoCount=0;
+      for(const g of groups){
+        // category heading row: name in A (orange), component labels, then supplier names over their rate columns
+        put(r,1,g.name,{font:{bold:true,underline:true},fill:C_CAT,bd:1});
+        [[8,"Quote"],[11,"Labour"],[12,"Material"],[13,"Plant"]].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center"}}));
+        g.sups.forEach((s,i)=>{ const d=[...s.dates]; put(r,SUP0+i,s.name+(d.length===1?`\n(${d[0]})`:""),{fill:C_SUPHDR,bd:1,al:{horizontal:"center",wrapText:true}}); });
+        ws.getRow(r).height=g.sups.some(s=>s.dates.size===1)?25.5:12.75; r++;
+        for(const it of g.items){
           const row=ws.getRow(r);
-          vals.forEach((v,i)=>{ const c=row.getCell(i+1); c.value=(moneyCols.has(i+1)&&!(+v>0))?null:v; c.border=bd; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:fillArgb}}; c.alignment={vertical:"top",horizontal:(i>=3&&i<=7)?"right":"left",wrapText:(i===0||i===8)}; if(moneyCols.has(i+1))c.numFmt="#,##0.00"; if(i===2)c.font={name:"Consolas",color:{argb:"FF1D4ED8"}}; if(i===7)c.font={bold:true,color:{argb:"FF1D4ED8"}}; });
-          if((codeCount[(it.code||"").trim().toLowerCase()]||0)>1){ const cc2=row.getCell(3); cc2.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFECACA"}}; cc2.font={name:"Consolas",bold:true,color:{argb:"FFB91C1C"}}; }
-          // embed this item's photos in the columns after the table, on the same row
+          const lab=+it.labour||0,mat=+it.material||0,pl=+it.plant||0,sub=+it.subcon||0,oh=+it.oh||0,pr=+it.profit||0;
+          const latest={}; (it.costData||[]).forEach(e=>{ const k=String(e.supplier||"").trim().toLowerCase(); if(!k||!(k in g.supIdx))return; const p=latest[k]; if(!p||String(e.date||"")>=String(p.date||""))latest[k]=e; });
+          // A supplier whose rate equals one of the item's cost figures is the "selected" quote: that cost cell links to it (=+R9) and it turns blue; others stay pink.
+          // Prefer a quote filed under the same component, else any supplier with that exact rate.
+          const sel={}; const used=new Set();
+          [["subcon",sub],["labour",lab],["material",mat],["plant",pl]].forEach(([comp,v])=>{ if(!(v>0))return; const ks=Object.keys(latest).filter(k=>!used.has(k)&&Math.abs((+latest[k].rate||0)-v)<0.005); const k=ks.find(k=>latest[k].component===comp)??ks[0]; if(k!==undefined){sel[comp]=k;used.add(k);} });
+          const costCell=(c,comp,v)=>put(r,c,sel[comp]!==undefined?{formula:`+${L(SUP0+g.supIdx[sel[comp]])}${r}`,result:v}:(v||null),{fill:c===8?C_QUOTE:undefined,nf:NF,al:{horizontal:"center"}});
+          put(r,2,it.desc||"",{al:{wrapText:true}});
+          put(r,3,it.unit||"",{al:{horizontal:"center"}});
+          const cc=put(r,4,it.code||"",{fill:it.code?C_CODE:undefined,al:{horizontal:"left",wrapText:true}});
+          if((codeCount[(it.code||"").trim().toLowerCase()]||0)>1){ cc.fill=fill("FFFECACA"); cc.font={...F,bold:true,color:{argb:"FFB91C1C"}}; }
+          const amt=bTot(it);
+          put(r,5,{formula:`+F${r}`,result:amt},{font:{bold:true},fill:C_RATE,nf:NF,al:{horizontal:"center"}});
+          put(r,6,{formula:`(SUM(G${r}:M${r})-I${r})*(1+N${r}/100)*(1+O${r}/100)`,result:amt},{nf:NF});
+          costCell(8,"subcon",sub); costCell(11,"labour",lab); costCell(12,"material",mat); costCell(13,"plant",pl);
+          [[14,oh],[15,pr]].forEach(([c,v])=>put(r,c,v||null,{nf:"0.##",al:{horizontal:"center"}}));
+          Object.entries(latest).forEach(([k,e])=>{ const cell=put(r,SUP0+g.supIdx[k],+e.rate||0,{fill:used.has(k)?C_SEL:C_OTHER,nf:NF,al:{horizontal:"center",wrapText:true}});
+            const note=[e.component&&e.component!=="subcon"&&(CLABEL[e.component]||(ccomps.find(x=>x.key===e.component)||{}).label||e.component),e.location&&`@ ${e.location}`,e.date&&`Date: ${e.date}`,e.note].filter(Boolean).join("\n"); if(note)cell.note=note; });
+          // embed this item's photos after the supplier columns, on the same row
           const itemPhotos=(it.costData||[]).flatMap(e=>e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[])).slice(0,12);
-          if(itemPhotos.length){ row.height=98; for(let i=0;i<itemPhotos.length;i++){ try{ const small=await shrinkDataURL(itemPhotos[i]); const m=/^data:image\/(\w+);base64,(.+)$/.exec(small); if(m){ const id=wb.addImage({base64:m[2],extension:"jpeg"}); ws.addImage(id,{tl:{col:headers.length+i,row:r-1},ext:{width:124,height:92}}); photoCount++; } }catch{} } }
+          if(itemPhotos.length){ row.height=98; for(let i=0;i<itemPhotos.length;i++){ try{ const small=await shrinkDataURL(itemPhotos[i]); const m=/^data:image\/(\w+);base64,(.+)$/.exec(small); if(m){ const id=wb.addImage({base64:m[2],extension:"jpeg"}); ws.addImage(id,{tl:{col:photoCol-1+i,row:r-1},ext:{width:124,height:92}}); photoCount++; } }catch{} } }
           r++; count++;
         }
+        r++; // blank row between categories
       }
-      ws.views=[{state:"frozen",ySplit:2}];
+      ws.views=[{state:"frozen",xSplit:9,ySplit:5,topLeftCell:"J6"}];
       const out=await wb.xlsx.writeBuffer(); const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-      const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR_BuildUpRates.xlsx"; a.click(); URL.revokeObjectURL(url);
+      const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR.xlsx"; a.click(); URL.revokeObjectURL(url);
       toast_(`✅ Exported ${count} items${photoCount?` + ${photoCount} photos`:""}`);
     }catch(e){ toast_("⚠️ Export failed: "+(e&&e.message||e)); }
-  },[burItems,cats,toast_,catSort]);
+  },[burItems,cats,toast_,catSort,ccomps]);
 
   // ── BUR writes (per-document in shared library) ─────────────────────────────
   const addBurItem=useCallback(async catId=>{ const ref=doc(collection(db,"bur")); try{ await setDoc(ref,{pid,catId,code:"",desc:"New Item",unit:"sum",labour:0,material:0,plant:0,subcon:0,oh:15,profit:10,costData:[],quote:null,group:""}); setExpBur(ref.id);}catch(e){toast_("⚠️ "+e.message);} },[pid]);
@@ -854,6 +992,236 @@ export default function App(){
                 </table>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ══ COMPARE QUOTES ══ */}
+        {tab==="compare"&&(
+          <div>
+            <div style={{display:"flex",gap:6,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:6,overflowX:"auto",flex:1,paddingBottom:2}}>
+                {comparisons.map(c=><button key={c.id} onClick={()=>setSelCompId(c.id)} style={{padding:"6px 12px",borderRadius:20,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,background:selCompId===c.id?"#1e3a5f":"#fff",color:selCompId===c.id?"#fff":"#475569",boxShadow:"0 1px 3px rgba(0,0,0,.1)"}}>{c.trade||c.project||"Untitled comparison"}</button>)}
+              </div>
+              <button onClick={addComparison} style={{background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:20,padding:"5px 12px",fontSize:11,cursor:"pointer",color:"#475569",fontWeight:600,whiteSpace:"nowrap",flexShrink:0}}>+ New Comparison</button>
+            </div>
+
+            {!selComp?(
+              <div style={{background:"#fff",borderRadius:12,padding:40,textAlign:"center",color:"#94a3b8"}}>
+                <div style={{fontSize:36,marginBottom:8}}>🆚</div>
+                <div style={{fontWeight:600,fontSize:14,marginBottom:4}}>No comparison yet</div>
+                <div style={{fontSize:13}}>Click "+ New Comparison" to compare subcontractor quotes for a trade</div>
+              </div>
+            ):(
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+
+                <div style={{background:"#fff",borderRadius:12,padding:14,boxShadow:"0 1px 4px rgba(0,0,0,.08)",display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10}}>
+                  {[["project","Project"],["trade","Trade / Package"],["reference","Reference"],["preparedDate","Prepared Date"]].map(([k,l])=>(
+                    <div key={k}><div style={{fontSize:10,color:"#94a3b8",marginBottom:3,fontWeight:600}}>{l.toUpperCase()}</div>
+                    <input style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 9px",fontSize:13,outline:"none",boxSizing:"border-box"}} value={selComp[k]} onChange={e=>updComp({[k]:e.target.value})}/></div>
+                  ))}
+                  <div style={{gridColumn:"1/-1",textAlign:"right"}}>
+                    <button onClick={()=>delComparison(selComp.id)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:12,fontWeight:600}}>🗑 Delete this comparison</button>
+                  </div>
+                </div>
+
+                <div style={{background:"#fff",borderRadius:12,padding:14,boxShadow:"0 1px 4px rgba(0,0,0,.08)"}}>
+                  <div style={{fontSize:12,fontWeight:700,color:"#1e293b",marginBottom:8}}>Subcontractors Bidding</div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                    {selComp.bidders.map(name=>(
+                      <span key={name} style={{background:"#eff6ff",color:"#1d4ed8",borderRadius:20,padding:"5px 8px 5px 12px",fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
+                        {name}<button onClick={()=>removeBidder(name)} style={{background:"none",border:"none",color:"#1d4ed8",cursor:"pointer",fontWeight:700,fontSize:12}}>✕</button>
+                      </span>
+                    ))}
+                    <input style={{border:"1.5px solid #e2e8f0",borderRadius:20,padding:"5px 12px",fontSize:12,outline:"none",width:160}} placeholder="e.g. Prefab Tech 3" value={newBidderName} onChange={e=>setNewBidderName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addBidder()}/>
+                    <button onClick={addBidder} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:20,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>+ Add</button>
+                  </div>
+                  {selComp.bidders.length===0&&<div style={{fontSize:12,color:"#94a3b8",marginTop:8}}>Add at least one subcontractor before adding items.</div>}
+                </div>
+
+                {selComp.bidders.length>0&&(()=>{
+                  const flagsBySection={}; selComp.sections.forEach(s=>{flagsBySection[s.id]=cmpAutoFlags(s,selComp.bidders);});
+                  return (
+                  <>
+                  {selComp.sections.map(section=>(
+                    <div key={section.id} style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden"}}>
+                      <div style={{padding:"10px 14px",borderBottom:"1px solid #f1f5f9",background:"#f8fafc",display:"flex",alignItems:"center",gap:8}}>
+                        <input style={{flex:1,border:"none",background:"none",fontWeight:700,fontSize:13,color:"#1e293b",outline:"none"}} value={section.name} onChange={e=>renameSection(section.id,e.target.value)}/>
+                        <button onClick={()=>addCmpItem(section.id)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Item</button>
+                        <button onClick={()=>delSection(section.id)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:12}}>🗑</button>
+                      </div>
+                      <div style={{overflowX:"auto"}}>
+                        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                          <thead>
+                            <tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:10}}>
+                              <th style={{padding:"6px",textAlign:"left",minWidth:36}}>No</th>
+                              <th style={{padding:"6px",textAlign:"left",minWidth:200}}>Description</th>
+                              <th style={{padding:"6px",textAlign:"center",minWidth:56}}>Unit</th>
+                              <th style={{padding:"6px",textAlign:"right",minWidth:70}}>WH Qty</th>
+                              {selComp.bidders.map(name=><th key={name} colSpan={4} style={{padding:"6px",textAlign:"center",borderLeft:"2px solid #e2e8f0",minWidth:280}}>{name}</th>)}
+                              <th style={{width:28}}></th>
+                            </tr>
+                            <tr style={{background:"#f8fafc",color:"#cbd5e1",fontSize:9}}>
+                              <th colSpan={4}></th>
+                              {selComp.bidders.map(name=><Fragment key={name}>
+                                <th style={{padding:"2px 6px",borderLeft:"2px solid #e2e8f0",textAlign:"right"}}>Qty</th>
+                                <th style={{padding:"2px 6px",textAlign:"right"}}>Rate</th>
+                                <th style={{padding:"2px 6px",textAlign:"right"}}>Amount</th>
+                                <th style={{padding:"2px 6px",textAlign:"left"}}>Status / Remarks</th>
+                              </Fragment>)}
+                              <th></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {section.items.length===0?<tr><td colSpan={4+selComp.bidders.length*4+1} style={{padding:20,textAlign:"center",color:"#94a3b8"}}>No items yet</td></tr>:
+                            section.items.map(item=>{
+                              const amounts=selComp.bidders.map(name=>({name,amt:cmpAmount(item,name)}));
+                              const priced=amounts.filter(a=>a.amt!=null);
+                              const minAmt=priced.length?Math.min(...priced.map(a=>a.amt)):null;
+                              const f=flagsBySection[section.id][item.id]||{};
+                              return (
+                                <tr key={item.id} style={{borderBottom:"1px solid #f8fafc"}}>
+                                  <td style={{padding:"4px 6px"}}><input style={{width:28,border:"none",fontSize:11,outline:"none",background:"transparent"}} value={item.no} onChange={e=>updCmpItem(section.id,item.id,{no:e.target.value})}/></td>
+                                  <td style={{padding:"4px 6px"}}><input style={{width:"100%",minWidth:190,border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc} onChange={e=>updCmpItem(section.id,item.id,{desc:e.target.value})}/></td>
+                                  <td style={{padding:"4px 6px",textAlign:"center"}}><input style={{width:48,border:"none",fontSize:11,outline:"none",background:"transparent",textAlign:"center"}} value={item.unit} onChange={e=>updCmpItem(section.id,item.id,{unit:e.target.value})}/></td>
+                                  <td style={{padding:"4px 6px",textAlign:"right"}}><input type="number" style={{width:62,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.whQty} onChange={e=>updCmpItem(section.id,item.id,{whQty:e.target.value})}/></td>
+                                  {selComp.bidders.map(name=>{
+                                    const b=cmpBidderCell(item,name); const amt=amounts.find(a=>a.name===name).amt;
+                                    const isLowest=amt!=null&&minAmt!=null&&amt===minAmt;
+                                    const bf=f[name]||{qty:false,rate:false};
+                                    return (
+                                      <Fragment key={name}>
+                                        <td style={{padding:"4px 6px",borderLeft:"2px solid #f8fafc",background:bf.qty?"#ffe5a3":undefined,textAlign:"right"}}>
+                                          <input type="number" style={{width:56,border:"none",fontSize:11,outline:"none",background:"transparent",textAlign:"right"}} value={b.qty} onChange={e=>updCmpBidderCell(section.id,item.id,name,{qty:e.target.value})}/>
+                                        </td>
+                                        <td style={{padding:"4px 6px",background:bf.rate?"#ffe5a3":undefined,textAlign:"right"}}>
+                                          <input type="number" style={{width:66,border:"none",fontSize:11,outline:"none",background:"transparent",textAlign:"right"}} value={b.rate} onChange={e=>updCmpBidderCell(section.id,item.id,name,{rate:e.target.value})}/>
+                                        </td>
+                                        <td style={{padding:"4px 6px",textAlign:"right",fontWeight:isLowest?800:400,color:isLowest?"#15803d":b.status==="norate"?"#991b1b":"#1e293b",background:isLowest?"#dcfce7":b.status==="norate"?"#fee2e2":undefined,whiteSpace:"nowrap"}}>
+                                          {amt!=null?fmt(amt):CMP_STATUS_LABEL[b.status]}
+                                        </td>
+                                        <td style={{padding:"4px 6px"}}>
+                                          <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                                            <select style={{border:"none",fontSize:10,outline:"none",background:"transparent",color:"#64748b"}} value={b.status} onChange={e=>updCmpBidderCell(section.id,item.id,name,{status:e.target.value})}>
+                                              {CMP_STATUSES.map(s=><option key={s} value={s}>{CMP_STATUS_LABEL[s]}</option>)}
+                                            </select>
+                                            <input style={{flex:1,minWidth:90,border:"none",fontSize:10,outline:"none",background:"transparent",color:"#94a3b8"}} placeholder="remarks" value={b.remarks} onChange={e=>updCmpBidderCell(section.id,item.id,name,{remarks:e.target.value})}/>
+                                          </div>
+                                        </td>
+                                      </Fragment>
+                                    );
+                                  })}
+                                  <td style={{padding:"4px",textAlign:"center"}}><button onClick={()=>delCmpItem(section.id,item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:12,fontWeight:700}}>✕</button></td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          {section.items.length>0&&<tfoot><tr style={{background:"#eff6ff",fontWeight:700}}>
+                            <td colSpan={4} style={{padding:"8px",textAlign:"right",fontSize:11,color:"#475569"}}>Subtotal →</td>
+                            {selComp.bidders.map(name=>{
+                              const sub=section.items.reduce((t,i)=>t+(cmpAmount(i,name)||0),0);
+                              return <td key={name} colSpan={4} style={{padding:"8px",textAlign:"right",fontSize:12,color:"#1d4ed8",borderLeft:"2px solid #dbeafe"}}>{fmt(sub)}</td>;
+                            })}
+                            <td></td>
+                          </tr></tfoot>}
+                        </table>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={addSection} style={{background:"#f1f5f9",border:"1px dashed #cbd5e1",borderRadius:10,padding:"10px",fontSize:12,fontWeight:600,cursor:"pointer",color:"#475569"}}>+ Add Section</button>
+                  </>
+                  );
+                })()}
+
+                {selComp.bidders.length>0&&selComp.sections.length>0&&(
+                  <div style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden"}}>
+                    <div style={{padding:"12px 16px",borderBottom:"1px solid #f1f5f9",background:"#f8fafc",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <span style={{fontWeight:700,fontSize:14}}>📊 Ranking</span>
+                      <button onClick={()=>exportComparisonCSV(selComp)} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"6px 14px",fontSize:11,fontWeight:600,cursor:"pointer"}}>⬇ Export CSV</button>
+                    </div>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                      <thead><tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:11}}>{["Rank","Subcontractor","Total Bid Amount (WH Qty)","Unpriced Items"].map((h,i)=><th key={i} style={{padding:"8px 16px",textAlign:i>1?"right":"left",fontWeight:600,borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {selComp.bidders.map(name=>({name,total:cmpBidderTotal(selComp,name),unpriced:cmpUnpricedCount(selComp,name)}))
+                          .sort((a,b)=>a.total-b.total)
+                          .map((row,i)=>(
+                            <tr key={row.name} style={{borderBottom:"1px solid #f8fafc",background:i===0?"#f0fdf4":undefined}}>
+                              <td style={{padding:"10px 16px",fontWeight:800,color:i===0?"#15803d":"#94a3b8"}}>{i+1}</td>
+                              <td style={{padding:"10px 16px",fontWeight:600}}>{row.name}</td>
+                              <td style={{padding:"10px 16px",textAlign:"right",fontWeight:700,color:i===0?"#15803d":"#1e293b"}}>S$ {fmt(row.total)}</td>
+                              <td style={{padding:"10px 16px",textAlign:"right",color:row.unpriced>0?"#b45309":"#94a3b8"}}>{row.unpriced>0?`⚠ ${row.unpriced}`:"—"}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                    <div style={{padding:"8px 16px",fontSize:11,color:"#94a3b8",borderTop:"1px solid #f1f5f9"}}>Amounts are always computed on this project's own required quantity (WH Qty), not the bidder's quoted quantity — that's what makes bids comparable. Lowest total isn't automatically the right choice — check the flags below first.</div>
+                  </div>
+                )}
+
+                {selComp.bidders.length>0&&(
+                  <div style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden"}}>
+                    <div style={{padding:"12px 16px",borderBottom:"1px solid #f1f5f9",background:"#f8fafc"}}><span style={{fontWeight:700,fontSize:14}}>🚩 Risk Flags</span></div>
+
+                    {(()=>{
+                      const auto=[];
+                      selComp.sections.forEach(s=>{const fl=cmpAutoFlags(s,selComp.bidders);s.items.forEach(item=>{selComp.bidders.forEach(name=>{const f=fl[item.id]?.[name];if(f?.qty)auto.push({type:"Quantity discrepancy",item:item.no||item.desc,bidder:name,detail:`Quoted qty differs from WH Qty by more than ${QTY_MISMATCH_PCT*100}%.`,severity:"Medium"});if(f?.rate)auto.push({type:"Outlier rate",item:item.no||item.desc,bidder:name,detail:`Rate differs from this item's median priced rate by more than ${OUTLIER_PCT*100}%.`,severity:"High"});});});});
+                      return auto.length>0?(
+                        <div style={{padding:"10px 16px",borderBottom:"1px solid #f1f5f9"}}>
+                          <div style={{fontSize:11,fontWeight:700,color:"#94a3b8",marginBottom:6}}>AUTO-DETECTED ({auto.length})</div>
+                          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                            {auto.map((f,i)=>(<div key={i} style={{display:"flex",gap:8,alignItems:"center",fontSize:12}}>
+                              <span style={{background:SEV_COLOR[f.severity].bg,color:SEV_COLOR[f.severity].c,borderRadius:5,padding:"1px 7px",fontWeight:700,fontSize:10,flexShrink:0}}>{f.severity}</span>
+                              <span style={{color:"#475569"}}><b>{f.bidder}</b> · Item {f.item} · {f.type} — {f.detail}</span>
+                            </div>))}
+                          </div>
+                        </div>
+                      ):null;
+                    })()}
+
+                    <div style={{padding:"10px 16px"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#94a3b8",marginBottom:6}}>MANUAL NOTES ({selComp.riskFlags.length})</div>
+                      {selComp.riskFlags.length===0&&<div style={{fontSize:12,color:"#94a3b8",marginBottom:8}}>No manual flags added — use this for things a formula can't catch, like ambiguous scope wording or a weak warranty.</div>}
+                      <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:10}}>
+                        {selComp.riskFlags.map(f=>(
+                          <div key={f.id} style={{display:"flex",gap:8,alignItems:"flex-start",fontSize:12,background:"#f8fafc",borderRadius:8,padding:"7px 10px"}}>
+                            <span style={{background:SEV_COLOR[f.severity].bg,color:SEV_COLOR[f.severity].c,borderRadius:5,padding:"1px 7px",fontWeight:700,fontSize:10,flexShrink:0}}>{f.severity}</span>
+                            <span style={{flex:1,color:"#475569"}}><b>{f.type}</b>{(f.item||f.bidder)&&` — ${[f.item&&`Item ${f.item}`,f.bidder].filter(Boolean).join(" / ")}`}: {f.detail}</span>
+                            <button onClick={()=>delRiskFlag(f.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:12,flexShrink:0}}>✕</button>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"90px 1fr 1fr 2fr auto",gap:6,alignItems:"start"}}>
+                        <select style={{border:"1px solid #e2e8f0",borderRadius:6,padding:"6px",fontSize:11,outline:"none"}} value={newFlag.severity} onChange={e=>setNewFlag(f=>({...f,severity:e.target.value}))}>{["High","Medium","Low"].map(s=><option key={s}>{s}</option>)}</select>
+                        <input style={{border:"1px solid #e2e8f0",borderRadius:6,padding:"6px 8px",fontSize:11,outline:"none"}} placeholder="Type e.g. Ambiguous scope" value={newFlag.type} onChange={e=>setNewFlag(f=>({...f,type:e.target.value}))}/>
+                        <input style={{border:"1px solid #e2e8f0",borderRadius:6,padding:"6px 8px",fontSize:11,outline:"none"}} placeholder="Item no / bidder" value={newFlag.item} onChange={e=>setNewFlag(f=>({...f,item:e.target.value}))}/>
+                        <input style={{border:"1px solid #e2e8f0",borderRadius:6,padding:"6px 8px",fontSize:11,outline:"none"}} placeholder="Detail" value={newFlag.detail} onChange={e=>setNewFlag(f=>({...f,detail:e.target.value}))}/>
+                        <button onClick={addRiskFlag} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:6,padding:"6px 12px",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Add</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {selComp.bidders.length>0&&(
+                  <div style={{background:"#fff",borderRadius:12,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"hidden"}}>
+                    <div style={{padding:"12px 16px",borderBottom:"1px solid #f1f5f9",background:"#f8fafc"}}><span style={{fontWeight:700,fontSize:14}}>📄 Commercial Terms</span></div>
+                    <div style={{overflowX:"auto"}}>
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                        <thead><tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:11}}>{["Subcontractor","Validity","Payment Terms","Lead Time","Warranty","Notes"].map((h,i)=><th key={i} style={{padding:"8px 10px",textAlign:"left",fontWeight:600,borderBottom:"1px solid #e2e8f0",minWidth:i===0?110:130}}>{h}</th>)}</tr></thead>
+                        <tbody>
+                          {selComp.bidders.map(name=>{const t=selComp.commercialTerms[name]||{};return(
+                            <tr key={name} style={{borderBottom:"1px solid #f8fafc"}}>
+                              <td style={{padding:"6px 10px",fontWeight:600}}>{name}</td>
+                              {["validity","paymentTerms","leadTime","warranty","notes"].map(k=>(
+                                <td key={k} style={{padding:"4px 6px"}}><input style={{width:"100%",border:"none",fontSize:11,outline:"none",background:"transparent",boxSizing:"border-box"}} value={t[k]||""} onChange={e=>updCommercialTerm(name,{[k]:e.target.value})}/></td>
+                              ))}
+                            </tr>
+                          );})}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
