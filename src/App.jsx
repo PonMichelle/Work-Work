@@ -497,10 +497,10 @@ export default function App(){
       const HEAD=[[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[8,"Quote","center"],[9,"%","center"],[10,"Waste/ OH","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"Extra items (S$)","left"],[SUP0,"Subcon / Supplier","center"]];
       HEAD.forEach(([c,t,h])=>put(5,c,t,{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:h,wrapText:true}}));
       put(5,photoCol,"Photos",{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:"center"}});
-      let r=7, count=0, photoCount=0;
+      let r=7, count=0, photoCount=0; const catRows=new Set();
       for(const g of groups){
         // category heading row: name in A (orange), component labels, then supplier names over their rate columns
-        put(r,1,g.name,{font:{bold:true,underline:true},fill:C_CAT,bd:1});
+        put(r,1,g.name,{font:{bold:true,underline:true},fill:C_CAT,bd:1}); catRows.add(r);
         [[8,"Quote"],[9,"%"],[10,"Waste/ OH"],[11,"Labour"],[12,"Material"],[13,"Plant"],...g.xcols.map((n,i)=>[14+i,n])].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center",wrapText:true}}));
         g.sups.forEach((s,i)=>{ const d=[...s.dates]; put(r,SUP0+i,s.name+(d.length===1?`\n(${d[0]})`:""),{fill:C_SUPHDR,bd:1,al:{horizontal:"center",wrapText:true}}); });
         ws.getRow(r).height=g.sups.some(s=>s.dates.size===1)?25.5:12.75; r++;
@@ -519,7 +519,7 @@ export default function App(){
           put(r,3,it.unit||"",{al:{horizontal:"center"}});
           // Code gets "_unit" appended (e.g. Acoustic_feltCeiling_m2) unless it already ends with it
           const codeOut=codeWithUnit(it.code,it.unit);
-          const cc=put(r,4,codeOut,{fill:it.code?C_CODE:undefined,al:{horizontal:"left",wrapText:true}});
+          const cc=put(r,4,codeOut,{al:{horizontal:"left",wrapText:true}});
           if((codeCount[(it.code||"").trim().toLowerCase()]||0)>1){ cc.fill=fill("FFFECACA"); cc.font={...F,bold:true,color:{argb:"FFB91C1C"}}; }
           const amt=bTot(it);
           put(r,5,{formula:hasRoundUp(it)?`+ROUNDUP(F${r},${+it.roundUp})`:`+F${r}`,result:amt},{font:{bold:true},fill:C_RATE,nf:NF,al:{horizontal:"center"}});
@@ -539,6 +539,12 @@ export default function App(){
         }
         r++; // blank row between categories
       }
+      // Colour whole rows/columns like the master sheet: header row yellow, category rows orange, and every column keeps its
+      // colour all the way down (grey text area, purple Rate, cyan Quote, pink %, pale blue build-up, pink supplier quotes).
+      const lastCol=SUP0+Math.max(maxSup,4)-1;
+      const colFill=c=>c===5?C_RATE:c===8?C_QUOTE:c===9?"FFE6B8B7":(c>=10&&c<=17)?"FFDDEBF7":(c>=SUP0&&c<=lastCol)?C_OTHER:c===7?null:"FFF2F2F2";
+      for(let rr=5;rr<r;rr++) for(let c=1;c<=lastCol;c++){ const cell=ws.getCell(rr,c); if(cell.fill&&cell.fill.type==="pattern")continue;
+        const f=rr===5?C_HEAD:catRows.has(rr)?C_CAT:colFill(c); if(f)cell.fill=fill(f); if(rr===5||catRows.has(rr))cell.border={top:thin,bottom:thin}; }
       ws.views=[{state:"frozen",xSplit:9,ySplit:5,topLeftCell:"J6"}];
       const out=await wb.xlsx.writeBuffer(); const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
       const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR.xlsx"; a.click(); URL.revokeObjectURL(url);
