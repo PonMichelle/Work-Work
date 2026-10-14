@@ -494,14 +494,14 @@ export default function App(){
       for(let c=1;c<photoCol+12;c++) ws.getColumn(c).width=W[c]||18.2;
       put(1,1,"Exported "+new Date().toLocaleDateString("en-SG",{day:"numeric",month:"short",year:"numeric"}),{font:{bold:true}});
       put(3,1,"BUILD UP RATES",{font:{underline:true}});
-      const HEAD=[[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[8,"Quote","center"],[9,"Waste %","center"],[10,"Waste","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"Extra items (S$)","left"],[SUP0,"Subcon / Supplier","center"]];
+      const HEAD=[[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[8,"Quote","center"],[9,"%","center"],[10,"Waste/ OH","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"Extra items (S$)","left"],[SUP0,"Subcon / Supplier","center"]];
       HEAD.forEach(([c,t,h])=>put(5,c,t,{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:h,wrapText:true}}));
       put(5,photoCol,"Photos",{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:"center"}});
       let r=7, count=0, photoCount=0;
       for(const g of groups){
         // category heading row: name in A (orange), component labels, then supplier names over their rate columns
         put(r,1,g.name,{font:{bold:true,underline:true},fill:C_CAT,bd:1});
-        [[8,"Quote"],[9,"Waste %"],[10,"Waste"],[11,"Labour"],[12,"Material"],[13,"Plant"],...g.xcols.map((n,i)=>[14+i,n])].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center",wrapText:true}}));
+        [[8,"Quote"],[9,"%"],[10,"Waste/ OH"],[11,"Labour"],[12,"Material"],[13,"Plant"],...g.xcols.map((n,i)=>[14+i,n])].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center",wrapText:true}}));
         g.sups.forEach((s,i)=>{ const d=[...s.dates]; put(r,SUP0+i,s.name+(d.length===1?`\n(${d[0]})`:""),{fill:C_SUPHDR,bd:1,al:{horizontal:"center",wrapText:true}}); });
         ws.getRow(r).height=g.sups.some(s=>s.dates.size===1)?25.5:12.75; r++;
         let curSub="";
@@ -872,11 +872,11 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 </div>
                 <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
                   <div><label style={lbl}>SUBCON (S$)</label><input type="number" style={{...inp,width:90}} value={item.subcon?item.subcon:""} onChange={e=>updBur(item.id,{subcon:+e.target.value||0})}/></div>
-                  <div><label style={lbl}>WASTE %</label><input type="number" style={{...inp,width:70}} placeholder="0" value={item.waste?item.waste:""} onChange={e=>updBur(item.id,{waste:+e.target.value||0})}/></div>
+                  <div><label style={lbl}>WASTE/ OH %</label><input type="number" style={{...inp,width:70}} placeholder="0" value={item.waste?item.waste:""} onChange={e=>updBur(item.id,{waste:+e.target.value||0})}/></div>
                   <div><label style={lbl}>ROUND UP RATE</label><select style={{...inp,width:110}} value={hasRoundUp(item)?String(item.roundUp):""} onChange={e=>updBur(item.id,{roundUp:e.target.value===""?null:+e.target.value})}>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
                   <div><label style={lbl}>CATEGORY</label><select style={{...inp,background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
                   <div><label style={lbl}>SUB-CATEGORY</label><input list={"subcats_"+item.id} style={{...inp,width:200}} placeholder="(none)" value={item.group||""} onChange={e=>updBur(item.id,{group:e.target.value})}/><datalist id={"subcats_"+item.id}>{subcatsOf(item.catId).map(g=><option key={g} value={g}/>)}</datalist></div>
-                  <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b>{+item.waste?<> · Waste ({+item.waste}%) <b>S$ {fmt(wasteAmt(item))}</b></>:null}{xs.length?<> · Extras <b>S$ {fmt(extrasTot(item))}</b></>:null} · <span style={{color:"#1d4ed8",fontWeight:800}}>Rate S$ {fmt(total)}/{item.unit}</span></div>
+                  <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b>{+item.waste?<> · Waste/ OH ({+item.waste}%) <b>S$ {fmt(wasteAmt(item))}</b></>:null}{xs.length?<> · Extras <b>S$ {fmt(extrasTot(item))}</b></>:null} · <span style={{color:"#1d4ed8",fontWeight:800}}>Rate S$ {fmt(total)}/{item.unit}</span></div>
                 </div>
                 <div style={{marginTop:12,paddingTop:10,borderTop:"1px dashed #e2e8f0"}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:xs.length?8:0}}>
