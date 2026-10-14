@@ -70,6 +70,13 @@ const newSections=()=>SECTIONS.map(s=>({...s,items:[]}));
 const fmt=n=>(n||0).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFractionDigits:2});
 // Resize/compress an image File or Blob to a small JPEG data URL (for storing quote photos).
 // Aggressively shrink a data-URL image for embedding into Excel (small dimensions + low quality).
+// Work out a typed calculation like "((1+1)*2)+((3*1)+2)" or "=12.5*1.1". Only numbers, + - * / and brackets; returns NaN if invalid.
+const calcExpr=str=>{ const s=String(str??"").replace(/^\s*=/,"").replace(/\s+/g,""); if(!s||/[^0-9.+\-*/()]/.test(s))return NaN; let i=0;
+  const num=()=>{ const m=/^\d*\.?\d+|^\d+\./.exec(s.slice(i)); if(!m)return NaN; i+=m[0].length; return parseFloat(m[0]); };
+  const fac=()=>{ if(s[i]==="-"){i++;return -fac();} if(s[i]==="+"){i++;return fac();} if(s[i]==="("){i++; const v=sum(); if(s[i]!==")")return NaN; i++; return v;} return num(); };
+  const prod=()=>{ let v=fac(); while(s[i]==="*"||s[i]==="/"){ const op=s[i++], r=fac(); v=op==="*"?v*r:v/r; } return v; };
+  const sum=()=>{ let v=prod(); while(s[i]==="+"||s[i]==="-"){ const op=s[i++], r=prod(); v=op==="+"?v+r:v-r; } return v; };
+  const v=sum(); return i===s.length&&isFinite(v)?v:NaN; };
 const imgSize=dataUrl=>new Promise(res=>{ const im=new Image(); im.onload=()=>res({w:im.naturalWidth||im.width||210,h:im.naturalHeight||im.height||160}); im.onerror=()=>res({w:210,h:160}); im.src=dataUrl; });
 const shrinkDataURL=(dataUrl,max=460,q=0.45)=>new Promise(res=>{ if(!dataUrl){res("");return;} const im=new Image(); im.onload=()=>{ let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",q));}catch{res(dataUrl);} }; im.onerror=()=>res(dataUrl); im.src=dataUrl; });
 const imgToDataURL=blob=>new Promise(res=>{ if(!blob){res("");return;} const fr=new FileReader(); fr.onload=()=>{ const im=new Image(); im.onload=()=>{ const max=1100; let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",0.7));}catch{res("");} }; im.onerror=()=>res(""); im.src=fr.result; }; fr.onerror=()=>res(""); fr.readAsDataURL(blob); });
@@ -530,7 +537,9 @@ export default function App(){
           if(wp){ put(r,9,wp/100,{nf:"0.##%",al:{horizontal:"center"}}); put(r,10,{formula:`(H${r}+K${r}+L${r}+M${r})*I${r}`,result:wasteAmt(it)},{nf:NF,al:{horizontal:"center"}}); }
           // extra items: lump-sum S$ under their named column (N..Q)
           const xsum={}, xnote={}; (it.extras||[]).forEach(x=>{ const c=g.xcol(String(x.name||"").trim()||"Other"); xsum[c]=(xsum[c]||0)+extraAmt(it,x); (xnote[c]=xnote[c]||[]).push(`${x.name||"Other"}: S$ ${extraAmt(it,x).toFixed(2)}`); });
-          Object.entries(xsum).forEach(([c,v])=>{ const xc=put(r,+c,+v.toFixed(4)||null,{nf:NF,al:{horizontal:"center"}}); if(xnote[c].length>1||g.xcols[+c-14]==="Others")xc.note=xnote[c].join("\n"); });
+          Object.entries(xsum).forEach(([c,v])=>{ const own=(it.extras||[]).filter(x=>g.xcol(String(x.name||"").trim()||"Other")===+c), ex=own.length===1&&own[0].type!=="%"&&/[-+*/()]/.test(String(own[0].expr||"").replace(/^\s*[=-]/,""))?String(own[0].expr).replace(/^\s*=/,"").replace(/\s+/g,""):null;
+            // a typed calculation goes into Excel as a real formula, e.g. =((1+1)*2)+((3*1)+2)
+            const xc=put(r,+c,ex&&isFinite(calcExpr(ex))?{formula:ex,result:+v.toFixed(4)}:(+v.toFixed(4)||null),{nf:NF,al:{horizontal:"center"}}); if(xnote[c].length>1||g.xcols[+c-14]==="Others")xc.note=xnote[c].join("\n"); });
           Object.entries(latest).forEach(([k,e])=>{ const cell=put(r,SUP0+g.supIdx[k],+e.rate||0,{fill:used.has(k)?C_SEL:C_OTHER,nf:NF,al:{horizontal:"center",wrapText:true}});
             const note=[e.component&&e.component!=="subcon"&&(CLABEL[e.component]||(ccomps.find(x=>x.key===e.component)||{}).label||e.component),e.location&&`@ ${e.location}`,e.date&&`Date: ${e.date}`,e.note].filter(Boolean).join("\n"); if(note)cell.note=note; });
           // embed this item's photos after the supplier columns, on the same row
@@ -894,7 +903,9 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                   </div>
                   {xs.map(x=><div key={x.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
                     <input list="extraNames" placeholder="Name (e.g. Scaffold)" autoFocus={!x.name} style={{...inp,width:180}} value={x.name} onChange={e=>setXs(xs.map(y=>y.id===x.id?{...y,name:e.target.value}:y))}/>
-                    <input type="number" style={{...inp,width:80,textAlign:"right"}} value={x.value} onChange={e=>setXs(xs.map(y=>y.id===x.id?{...y,value:e.target.value===""?"":+e.target.value}:y))}/>
+                    {(()=>{ const txt=x.expr??(x.value===""||x.value==null?"":String(x.value)); const isF=/[-+*/()]/.test(txt.replace(/^\s*-/,"")); const bad=txt.trim()!==""&&!isFinite(calcExpr(txt));
+                      return <><input title="Type a number or a formula, e.g. ((1+1)*2)+((3*1)+2)" style={{...inp,width:isF?190:80,textAlign:"right",borderColor:bad?"#ef4444":"#e2e8f0"}} value={txt} onChange={e=>{ const t=e.target.value, n=calcExpr(t); setXs(xs.map(y=>y.id===x.id?{...y,expr:t,value:t.trim()===""?"":(isFinite(n)?n:(y.value??""))}:y)); }}/>
+                        {isF&&<span style={{fontSize:12,color:bad?"#ef4444":"#475569",whiteSpace:"nowrap"}}>{bad?"check formula":`= ${fmt(calcExpr(txt))}`}</span>}</>; })()}
                     {x.type==="%"?<span style={{fontSize:12,color:"#475569",minWidth:90}}>% = S$ {fmt(extraAmt(item,x))}</span>:<span style={{fontSize:12,color:"#94a3b8"}}>S$</span>}
                     <button onClick={()=>setXs(xs.filter(y=>y.id!==x.id))} title="Remove" style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>✕</button>
                   </div>)}
