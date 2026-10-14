@@ -7,7 +7,9 @@ import burSeed from "./burSeed.json"; // master BUR list imported from BUR.xlsx
 import SheetGrid from "./SheetGrid.jsx";
 
 const SECTIONS=[{id:"prelim",name:"Preliminaries"},{id:"building",name:"Building Works"},{id:"external",name:"External Works"},{id:"mande",name:"M&E Works"},{id:"fees",name:"Professional Fees"}];
-const UNITS=["m²","m³","m","nr","sum","lot","kg","t","m run","%","item"];
+const UNITS=["m²","m³","m","no.","sum","lot","kg","t","m run","%","item"]
+// Dropdown options for a unit box: always include the item's own unit (e.g. "m2" or "nr" from older data) so the box shows what is really stored.
+const unitOpts=cur=>!cur||UNITS.includes(cur)?UNITS:[cur,...UNITS];
 const STATUSES=["Draft","Under Review","Confirmed"];
 const SS={Draft:{bg:"#f1f5f9",c:"#475569"},"Under Review":{bg:"#fef9c3",c:"#b45309"},Confirmed:{bg:"#dcfce7",c:"#15803d"}};
 const ROLES=["Lead QS","Estimator","PM","Client"];
@@ -83,7 +85,7 @@ const imgToDataURL=blob=>new Promise(res=>{ if(!blob){res("");return;} const fr=
 const uid=()=>"_"+Math.random().toString(36).slice(2,10);
 // BUR codes carry their unit as a suffix, e.g. Acoustic_feltCeiling_m2. Lookups accept the code with or without the suffix,
 // so older BOQ rows / Master BQ templates that still use the bare code keep matching.
-const unitTag=u=>String(u||"").trim().replace(/²/g,"2").replace(/³/g,"3").replace(/%/g,"pct").replace(/\s+/g,"");
+const unitTag=u=>String(u||"").trim().replace(/²/g,"2").replace(/³/g,"3").replace(/%/g,"pct").replace(/[\s.]+/g,""); // "no." -> "no", "m run" -> "mrun"
 const codeBase=(code,unit)=>{ const c=String(code||"").trim(), t=unitTag(unit); return t&&c.toLowerCase().endsWith("_"+t.toLowerCase())?c.slice(0,-(t.length+1)):c; };
 const codeWithUnit=(code,unit)=>{ const c=String(code||"").trim(), t=unitTag(unit); if(!c||!t)return c; return c.toLowerCase().endsWith("_"+t.toLowerCase())?c:`${c}_${t}`; };
 const swapUnitTag=(code,oldU,newU)=>String(code||"").trim()?codeWithUnit(codeBase(code,oldU),newU):code;
@@ -896,7 +898,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <td style={{padding:"2px 4px",textAlign:"center"}}><input type="checkbox" title="Click to select · Shift+click to select a range" checked={checked} onChange={()=>{}} onClick={e=>clickSel(e,item.id,items)} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
                 <td draggable onDragStart={e=>{e.dataTransfer.setData("text/bur",item.id);e.dataTransfer.effectAllowed="move";}} title="Drag me onto a category to move • click to expand" style={{padding:"2px 4px",textAlign:"center",cursor:"grab",color:isExp?"#2563eb":"#94a3b8",userSelect:"none"}} onClick={()=>setExpBur(isExp?null:item.id)}>⠿{isExp?"▼":"▶"}</td>
                 <td style={{padding:"3px 6px",overflow:"hidden"}}><input style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></td>
-                <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent",width:"100%"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value,code:swapUnitTag(item.code,item.unit,e.target.value)})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
+                <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent",width:"100%"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value,code:swapUnitTag(item.code,item.unit,e.target.value)})}>{unitOpts(item.unit).map(u=><option key={u}>{u}</option>)}</select></td>
                 <td style={{padding:"3px 6px",overflow:"hidden",background:dup?"#fee2e2":undefined}}><input title={dup?"⚠️ Duplicate BUR code":""} style={{width:"100%",border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:dup?"#b91c1c":"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})} onBlur={e=>{const c=codeWithUnit(e.target.value,item.unit); if(c!==e.target.value)updBur(item.id,{code:c});}}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.labour?item.labour:""} onChange={e=>updBur(item.id,{labour:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.material?item.material:""} onChange={e=>updBur(item.id,{material:+e.target.value||0})}/></td>
@@ -1069,7 +1071,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                             const p={padding:"4px 6px"};
                             if(col.id==="ref")return<td key={col.id} style={p}><input style={{width:44,border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.ref||""} onChange={e=>updItem(cs.id,item.id,{ref:e.target.value})} onBlur={()=>blurSave(cs.id,item.id,item.code)}/></td>;
                             if(col.id==="desc")return<td key={col.id} style={p}><input style={{width:col.w,border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc||""} onChange={e=>updItem(cs.id,item.id,{desc:e.target.value})} onBlur={()=>blurSave(cs.id,item.id,item.code)}/></td>;
-                            if(col.id==="unit")return<td key={col.id} style={{...p,textAlign:"center"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent"}} value={item.unit||"sum"} onChange={e=>updItem(cs.id,item.id,{unit:e.target.value})}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>;
+                            if(col.id==="unit")return<td key={col.id} style={{...p,textAlign:"center"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent"}} value={item.unit||"sum"} onChange={e=>updItem(cs.id,item.id,{unit:e.target.value})}>{unitOpts(item.unit).map(u=><option key={u}>{u}</option>)}</select></td>;
                             if(col.id==="qty")return<td key={col.id} style={{...p,textAlign:"right"}}><input type="number" style={{width:52,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.qty??""} onChange={e=>updItem(cs.id,item.id,{qty:+e.target.value||0})} onBlur={()=>blurSave(cs.id,item.id,item.code)}/></td>;
                             if(col.id==="rA")return<td key={col.id} style={{...p,textAlign:"right"}}><input type="number" style={{width:68,border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.rA??""} onChange={e=>updItem(cs.id,item.id,{rA:+e.target.value||0})} onBlur={()=>blurSave(cs.id,item.id,item.code)}/></td>;
                             if(col.id==="amtA")return<td key={col.id} style={{...p,textAlign:"right",fontWeight:600,color:"#1d4ed8",whiteSpace:"nowrap"}}>{fmt(aA(item))}</td>;
