@@ -119,7 +119,13 @@ const findBurByCode=(items,code)=>{ const k=String(code||"").trim().toLowerCase(
 const ROUND_OPTS=[["","Exact"],["0","Whole $"],["1","1 decimal"]];
 const hasRoundUp=b=>b&&b.roundUp!==undefined&&b.roundUp!==null&&b.roundUp!=="";
 // Rate = (labour+material+plant+subcon) + OH% + profit%, then rounded UP if the item asks for it (like Excel ROUNDUP(x,0) / ROUNDUP(x,1)).
-const bTot=b=>{const d=(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0),oh=d*(+b.oh||0)/100,s=d+oh;const t=s*(1+(+b.profit||0)/100);if(!hasRoundUp(b))return t;const f=10**(+b.roundUp);return Math.ceil(t*f-1e-9)/f;};
+// Extra build-up lines per item (item.extras = [{id,name,type,value}]): type "$" = S$ per unit added to the direct cost,
+// type "%" = percent of labour+material+plant+subcon (e.g. 5% waste). They count before OH and profit.
+const EXTRA_PRESETS=[["Waste","%"],["Mortar","$"],["Mesh","$"],["Accessories","$"]];
+const baseDirect=b=>(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0);
+const extraAmt=(b,x)=>x.type==="%"?baseDirect(b)*(+x.value||0)/100:(+x.value||0);
+const extrasTot=b=>(b.extras||[]).reduce((t,x)=>t+extraAmt(b,x),0);
+const bTot=b=>{const d=baseDirect(b)+extrasTot(b),oh=d*(+b.oh||0)/100,s=d+oh;const t=s*(1+(+b.profit||0)/100);if(!hasRoundUp(b))return t;const f=10**(+b.roundUp);return Math.ceil(t*f-1e-9)/f;};
 // Custom BOQ columns: compute each column's value per row. Formula columns can reference
 // qty, rateA, rateB, amtA, amtB, and earlier custom columns (by sanitised name).
 // Compute custom BOQ columns. Formulas may use natural names: Qty, Rate A, Rate B,
@@ -485,14 +491,14 @@ export default function App(){
       for(let c=1;c<photoCol+12;c++) ws.getColumn(c).width=W[c]||18.2;
       put(1,1,"Exported "+new Date().toLocaleDateString("en-SG",{day:"numeric",month:"short",year:"numeric"}),{font:{bold:true}});
       put(3,1,"BUILD UP RATES",{font:{underline:true}});
-      const HEAD=[[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[8,"Quote","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"OH %","center"],[15,"Profit %","center"],[SUP0,"Subcon / Supplier","center"]];
+      const HEAD=[[16,"Extras","center"],[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[8,"Quote","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"OH %","center"],[15,"Profit %","center"],[SUP0,"Subcon / Supplier","center"]];
       HEAD.forEach(([c,t,h])=>put(5,c,t,{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:h,wrapText:true}}));
       put(5,photoCol,"Photos",{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:"center"}});
       let r=7, count=0, photoCount=0;
       for(const g of groups){
         // category heading row: name in A (orange), component labels, then supplier names over their rate columns
         put(r,1,g.name,{font:{bold:true,underline:true},fill:C_CAT,bd:1});
-        [[8,"Quote"],[11,"Labour"],[12,"Material"],[13,"Plant"]].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center"}}));
+        [[8,"Quote"],[11,"Labour"],[12,"Material"],[13,"Plant"],[16,"Extras"]].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center"}}));
         g.sups.forEach((s,i)=>{ const d=[...s.dates]; put(r,SUP0+i,s.name+(d.length===1?`\n(${d[0]})`:""),{fill:C_SUPHDR,bd:1,al:{horizontal:"center",wrapText:true}}); });
         ws.getRow(r).height=g.sups.some(s=>s.dates.size===1)?25.5:12.75; r++;
         let curSub="";
@@ -514,9 +520,10 @@ export default function App(){
           if((codeCount[(it.code||"").trim().toLowerCase()]||0)>1){ cc.fill=fill("FFFECACA"); cc.font={...F,bold:true,color:{argb:"FFB91C1C"}}; }
           const amt=bTot(it);
           put(r,5,{formula:hasRoundUp(it)?`+ROUNDUP(F${r},${+it.roundUp})`:`+F${r}`,result:amt},{font:{bold:true},fill:C_RATE,nf:NF,al:{horizontal:"center"}});
-          put(r,6,{formula:`(SUM(G${r}:M${r})-I${r})*(1+N${r}/100)*(1+O${r}/100)`,result:bTot({...it,roundUp:null})},{nf:NF});
+          put(r,6,{formula:`(SUM(G${r}:M${r})-I${r}+P${r})*(1+N${r}/100)*(1+O${r}/100)`,result:bTot({...it,roundUp:null})},{nf:NF});
           costCell(8,"subcon",sub); costCell(11,"labour",lab); costCell(12,"material",mat); costCell(13,"plant",pl);
           [[14,oh],[15,pr]].forEach(([c,v])=>put(r,c,v||null,{nf:"0.##",al:{horizontal:"center"}}));
+          if((it.extras||[]).length){ const xc=put(r,16,+extrasTot(it).toFixed(4)||null,{nf:NF,al:{horizontal:"center"}}); xc.note=it.extras.map(x=>`${x.name||"Other"}: ${x.type==="%"?`${+x.value||0}% = `:""}S$ ${extraAmt(it,x).toFixed(2)}`).join("\n"); }
           Object.entries(latest).forEach(([k,e])=>{ const cell=put(r,SUP0+g.supIdx[k],+e.rate||0,{fill:used.has(k)?C_SEL:C_OTHER,nf:NF,al:{horizontal:"center",wrapText:true}});
             const note=[e.component&&e.component!=="subcon"&&(CLABEL[e.component]||(ccomps.find(x=>x.key===e.component)||{}).label||e.component),e.location&&`@ ${e.location}`,e.date&&`Date: ${e.date}`,e.note].filter(Boolean).join("\n"); if(note)cell.note=note; });
           // embed this item's photos after the supplier columns, on the same row
@@ -832,7 +839,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
         </tr></thead>
         <tbody>
           {items.map((item,ri)=>{
-            const isExp=expBur===item.id; const total=bTot(item); const direct=(+item.labour||0)+(+item.material||0)+(+item.plant||0)+(+item.subcon||0); const cdCount=(item.costData||[]).length; const dup=isDupCode(item.code); const checked=selBur.has(item.id);
+            const isExp=expBur===item.id; const total=bTot(item); const direct=baseDirect(item)+extrasTot(item); const xs=item.extras||[]; const setXs=v=>updBur(item.id,{extras:v}); const cdCount=(item.costData||[]).length; const dup=isDupCode(item.code); const checked=selBur.has(item.id);
             const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2}; const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
             const g=String(item.group||"").trim(), newGrp=burGrouped&&g&&(ri===0||String(items[ri-1].group||"").trim()!==g), grpItems=newGrp?items.filter(x=>String(x.group||"").trim()===g):[];
             return(<Fragment key={item.id}>
@@ -864,7 +871,21 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                   <div><label style={lbl}>ROUND UP RATE</label><select style={{...inp,width:110}} value={hasRoundUp(item)?String(item.roundUp):""} onChange={e=>updBur(item.id,{roundUp:e.target.value===""?null:+e.target.value})}>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
                   <div><label style={lbl}>CATEGORY</label><select style={{...inp,background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
                   <div><label style={lbl}>SUB-CATEGORY</label><input list={"subcats_"+item.id} style={{...inp,width:200}} placeholder="(none)" value={item.group||""} onChange={e=>updBur(item.id,{group:e.target.value})}/><datalist id={"subcats_"+item.id}>{subcatsOf(item.catId).map(g=><option key={g} value={g}/>)}</datalist></div>
-                  <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b> · OH({item.oh}%) <b>S$ {fmt(direct*(+item.oh||0)/100)}</b> · <span style={{color:"#1d4ed8",fontWeight:800}}>Total S$ {fmt(total)}/{item.unit}</span></div>
+                  <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct{xs.length?" (incl. extras)":""} <b>S$ {fmt(direct)}</b> · OH({item.oh}%) <b>S$ {fmt(direct*(+item.oh||0)/100)}</b> · <span style={{color:"#1d4ed8",fontWeight:800}}>Total S$ {fmt(total)}/{item.unit}</span></div>
+                </div>
+                <div style={{marginTop:12,paddingTop:10,borderTop:"1px dashed #e2e8f0"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:xs.length?8:0}}>
+                    <span style={lbl}>EXTRAS</span>
+                    {EXTRA_PRESETS.map(([n,t])=><button key={n} onClick={()=>setXs([...xs,{id:uid(),name:n,type:t,value:""}])} style={{background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",color:"#334155",fontWeight:600}}>+ {n}</button>)}
+                    <button onClick={()=>setXs([...xs,{id:uid(),name:"",type:"$",value:""}])} style={{background:"#f1f5f9",border:"1px dashed #94a3b8",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",color:"#334155",fontWeight:600}}>+ Other…</button>
+                  </div>
+                  {xs.map(x=><div key={x.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                    <input list="extraNames" placeholder="Name (e.g. Scaffold)" autoFocus={!x.name} style={{...inp,width:180}} value={x.name} onChange={e=>setXs(xs.map(y=>y.id===x.id?{...y,name:e.target.value}:y))}/>
+                    <input type="number" style={{...inp,width:80,textAlign:"right"}} value={x.value} onChange={e=>setXs(xs.map(y=>y.id===x.id?{...y,value:e.target.value===""?"":+e.target.value}:y))}/>
+                    <select style={{...inp,background:"#fff"}} value={x.type} onChange={e=>setXs(xs.map(y=>y.id===x.id?{...y,type:e.target.value}:y))}><option value="$">S$ / {item.unit||"unit"}</option><option value="%">% of direct cost</option></select>
+                    <span style={{fontSize:12,color:"#475569",minWidth:90}}>= S$ {fmt(extraAmt(item,x))}</span>
+                    <button onClick={()=>setXs(xs.filter(y=>y.id!==x.id))} title="Remove" style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>✕</button>
+                  </div>)}
                 </div>
               </td></tr>)}
             </Fragment>);
@@ -902,6 +923,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
         {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"10px 14px",fontSize:12,fontWeight:700,border:"none",flexShrink:0,whiteSpace:"nowrap",borderBottom:tab===t.id?"3px solid #9333ea":"3px solid transparent",color:tab===t.id?"#9333ea":"#64748b",background:tab===t.id?"linear-gradient(180deg,rgba(147,51,234,.08),transparent)":"none",cursor:"pointer"}}>{t.label}</button>)}
       </div>
 
+      <datalist id="extraNames">{[...new Set([...EXTRA_PRESETS.map(p=>p[0]),...burItems.flatMap(b=>(b.extras||[]).map(x=>String(x.name||"").trim()))].filter(Boolean))].map(n=><option key={n} value={n}/>)}</datalist>
       <datalist id="burlist">{burItems.filter(b=>b.code).map(b=><option key={b.id} value={b.code}>{b.desc} — S${fmt(bTot(b))}/{b.unit}</option>)}</datalist>
 
       {rateSugg&&(
