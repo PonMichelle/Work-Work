@@ -70,6 +70,7 @@ const newSections=()=>SECTIONS.map(s=>({...s,items:[]}));
 const fmt=n=>(n||0).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFractionDigits:2});
 // Resize/compress an image File or Blob to a small JPEG data URL (for storing quote photos).
 // Aggressively shrink a data-URL image for embedding into Excel (small dimensions + low quality).
+const imgSize=dataUrl=>new Promise(res=>{ const im=new Image(); im.onload=()=>res({w:im.naturalWidth||im.width||210,h:im.naturalHeight||im.height||160}); im.onerror=()=>res({w:210,h:160}); im.src=dataUrl; });
 const shrinkDataURL=(dataUrl,max=460,q=0.45)=>new Promise(res=>{ if(!dataUrl){res("");return;} const im=new Image(); im.onload=()=>{ let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",q));}catch{res(dataUrl);} }; im.onerror=()=>res(dataUrl); im.src=dataUrl; });
 const imgToDataURL=blob=>new Promise(res=>{ if(!blob){res("");return;} const fr=new FileReader(); fr.onload=()=>{ const im=new Image(); im.onload=()=>{ const max=1100; let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",0.7));}catch{res("");} }; im.onerror=()=>res(""); im.src=fr.result; }; fr.onerror=()=>res(""); fr.readAsDataURL(blob); });
 const uid=()=>"_"+Math.random().toString(36).slice(2,10);
@@ -491,7 +492,7 @@ export default function App(){
       const photoCol=SUP0+Math.max(maxSup,4)+1;
       // column widths copied from the master sheet
       const W={1:15,2:52,3:6,4:45,5:17.6,6:16.9,7:1.6,8:15.7,9:8.4,10:15.9,11:12,12:12,13:12,14:13,15:13,16:13,17:13};
-      for(let c=1;c<photoCol+12;c++) ws.getColumn(c).width=W[c]||18.2;
+      for(let c=1;c<photoCol+12;c++) ws.getColumn(c).width=c>=photoCol?31:(W[c]||18.2);
       put(1,1,"Exported "+new Date().toLocaleDateString("en-SG",{day:"numeric",month:"short",year:"numeric"}),{font:{bold:true}});
       put(3,1,"BUILD UP RATES",{font:{underline:true}});
       const HEAD=[[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[8,"Quote","center"],[9,"%","center"],[10,"Waste/ OH","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"Extra items (S$)","left"],[SUP0,"Subcon / Supplier","center"]];
@@ -534,7 +535,8 @@ export default function App(){
             const note=[e.component&&e.component!=="subcon"&&(CLABEL[e.component]||(ccomps.find(x=>x.key===e.component)||{}).label||e.component),e.location&&`@ ${e.location}`,e.date&&`Date: ${e.date}`,e.note].filter(Boolean).join("\n"); if(note)cell.note=note; });
           // embed this item's photos after the supplier columns, on the same row
           const itemPhotos=(it.costData||[]).flatMap(e=>e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[])).slice(0,12);
-          if(itemPhotos.length){ row.height=98; for(let i=0;i<itemPhotos.length;i++){ try{ const small=await shrinkDataURL(itemPhotos[i]); const m=/^data:image\/(\w+);base64,(.+)$/.exec(small); if(m){ const id=wb.addImage({base64:m[2],extension:"jpeg"}); ws.addImage(id,{tl:{col:photoCol-1+i,row:r-1},ext:{width:124,height:92}}); photoCount++; } }catch{} } }
+          // full stored photo (no re-compression), shown up to 210x160 px keeping its shape; enlarging it in Excel stays sharp
+          if(itemPhotos.length){ row.height=124; for(let i=0;i<itemPhotos.length;i++){ try{ const m=/^data:image\/(\w+);base64,(.+)$/.exec(itemPhotos[i]); if(m){ const {w,h}=await imgSize(itemPhotos[i]); const k=Math.min(210/w,160/h,1); const id=wb.addImage({base64:m[2],extension:/png/i.test(m[1])?"png":"jpeg"}); ws.addImage(id,{tl:{col:photoCol-1+i,row:r-1},ext:{width:Math.round(w*k),height:Math.round(h*k)}}); photoCount++; } }catch{} } }
           r++; count++;
         }
         r++; // blank row between categories
