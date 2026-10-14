@@ -186,6 +186,7 @@ export default function App(){
   const [burItems,setBurItems]=useState([]);
   const [selCat,setSelCat]=useState(DEF_CATS[0].id);
   const [expBur,setExpBur]=useState(null);
+  const [collapsedSubs,setCollapsedSubs]=useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("burCollapsedSubs")||"[]")); }catch{ return new Set(); } }); // "catId|sub-category" keys folded in the BUR table
   const [burSearch,setBurSearch]=useState(""); const [burSearchCat,setBurSearchCat]=useState(false);
   const [sortBy,setSortBy]=useState("code"); const [sortDir,setSortDir]=useState(1);
   const [burView,setBurView]=useState("tabs"); const [catSort,setCatSort]=useState("none");
@@ -514,7 +515,8 @@ export default function App(){
         ws.getRow(r).height=g.sups.some(s=>s.dates.size===1)?25.5:12.75; r++;
         let curSub="";
         for(const it of g.items){
-          const sg=String(it.group||"").trim(); if(sg&&sg!==curSub){ r++; put(r,2,sg,{font:{bold:true,underline:true}}); r++; } curSub=sg;
+          const sg=String(it.group||"").trim(); if(sg&&sg!==curSub){ ws.getRow(r).outlineLevel=1; r++; put(r,2,sg,{font:{bold:true,underline:true}}); ws.getRow(r).outlineLevel=1; r++; } curSub=sg;
+          ws.getRow(r).outlineLevel=sg?2:1;
           const row=ws.getRow(r);
           const lab=+it.labour||0,mat=+it.material||0,pl=+it.plant||0,sub=+it.subcon||0,wp=+it.waste||0;
           const latest={}; (it.costData||[]).forEach(e=>{ const k=supKey(e); if(!String(e.supplier||"").trim()||!(k in g.supIdx))return; latest[k]=e; });
@@ -556,6 +558,7 @@ export default function App(){
       const colFill=c=>c===5?C_RATE:c===8?C_QUOTE:c===9?"FFE6B8B7":(c>=10&&c<=17)?"FFDDEBF7":(c>=SUP0&&c<=lastCol)?C_OTHER:c===7?null:"FFF2F2F2";
       for(let rr=5;rr<r;rr++) for(let c=1;c<=lastCol;c++){ const cell=ws.getCell(rr,c); if(cell.fill&&cell.fill.type==="pattern")continue;
         const f=rr===5?C_HEAD:catRows.has(rr)?C_CAT:colFill(c); if(f)cell.fill=fill(f); if(rr===5||catRows.has(rr))cell.border={top:thin,bottom:thin}; }
+      ws.properties.outlineLevelRow=2; ws.properties.outlineProperties={summaryBelow:false,summaryRight:false};
       ws.views=[{state:"frozen",xSplit:9,ySplit:5,topLeftCell:"J6"}];
       const out=await wb.xlsx.writeBuffer(); const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
       const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR.xlsx"; a.click(); URL.revokeObjectURL(url);
@@ -757,6 +760,11 @@ export default function App(){
   const burGrouped=!(_q&&!burSearchCat); const _ordered=burGrouped?orderBySubcat(_sorted):_sorted;
   const catTotal=_ordered.length; const catItems=_ordered.slice(0,BUR_MAX);
   const subcatsOf=cid=>[...new Set(burItems.filter(b=>b.catId===cid).map(b=>String(b.group||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const saveCollapsed=st=>{ try{ localStorage.setItem("burCollapsedSubs",JSON.stringify([...st])); }catch{} return st; };
+  const subKey=(cid,g)=>cid+"|"+g;
+  const toggleSub=(cid,g)=>setCollapsedSubs(prev=>{ const st=new Set(prev), k=subKey(cid,g); st.has(k)?st.delete(k):st.add(k); return saveCollapsed(st); });
+  const shownSubKeys=burGrouped?[...new Set(catItems.filter(b=>String(b.group||"").trim()).map(b=>subKey(b.catId,String(b.group).trim())))]:[];
+  const collapseAllSubs=fold=>setCollapsedSubs(prev=>{ const st=new Set(prev); shownSubKeys.forEach(k=>fold?st.add(k):st.delete(k)); return saveCollapsed(st); });
   const toggleSort=f=>{ if(sortBy===f)setSortDir(d=>-d); else{setSortBy(f);setSortDir(1);} };
   const renameCat=cid=>{ const c=cats.find(x=>x.id===cid); if(!c)return; const nm=prompt("Rename category:",c.name); if(nm&&nm.trim())pushCats(cats.map(x=>x.id===cid?{...x,name:nm.trim()}:x)); };
   const delCat=cid=>{ const n=burItems.filter(b=>b.catId===cid).length; if(n>0){alert(`This category has ${n} item(s). Move them to another category first (open an item → CATEGORY), then delete.`);return;} if(confirm("Delete this empty category?")){ pushCats(cats.filter(x=>x.id!==cid)); if(selCat===cid){const o=cats.find(x=>x.id!==cid); setSelCat(o?o.id:"");} } };
@@ -878,11 +886,12 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
           {items.map((item,ri)=>{
             const isExp=expBur===item.id; const total=bTot(item); const direct=baseDirect(item); const xs=item.extras||[]; const setXs=v=>updBur(item.id,{extras:v}); const cdCount=(item.costData||[]).length; const dup=isDupCode(item.code); const checked=selBur.has(item.id);
             const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2}; const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
-            const g=String(item.group||"").trim(), newGrp=burGrouped&&g&&(ri===0||String(items[ri-1].group||"").trim()!==g), grpItems=newGrp?items.filter(x=>String(x.group||"").trim()===g):[];
+            const g=String(item.group||"").trim(), folded=burGrouped&&!!g&&collapsedSubs.has(subKey(item.catId,g)), newGrp=burGrouped&&g&&(ri===0||String(items[ri-1].group||"").trim()!==g), grpItems=newGrp?items.filter(x=>String(x.group||"").trim()===g):[];
             return(<Fragment key={item.id}>
               {newGrp&&<tr style={{background:"#f8fafc"}}><td style={{textAlign:"center",borderBottom:"1px solid #e2e8f0"}}><input type="checkbox" title="Select all in this sub-category" checked={grpItems.every(x=>selBur.has(x.id))} onChange={e=>setSelBur(prev=>{const s=new Set(prev); grpItems.forEach(x=>e.target.checked?s.add(x.id):s.delete(x.id)); return s;})} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
-                <td colSpan={burHead.length+2} style={{padding:"7px 8px",borderBottom:"1px solid #e2e8f0",fontWeight:700,textDecoration:"underline",color:"#0f172a",fontSize:12}}>{g} <span style={{textDecoration:"none",fontWeight:500,color:"#94a3b8",fontSize:11}}>({grpItems.length})</span>
+                <td colSpan={burHead.length+2} onClick={e=>{ if(e.target.tagName!=="BUTTON")toggleSub(item.catId,g); }} title={folded?"Click to expand":"Click to collapse"} style={{padding:"7px 8px",borderBottom:"1px solid #e2e8f0",fontWeight:700,color:"#0f172a",fontSize:12,cursor:"pointer",userSelect:"none"}}><span style={{display:"inline-block",width:14,color:"#64748b"}}>{folded?"▸":"▾"}</span><span style={{textDecoration:"underline"}}>{g}</span> <span style={{textDecoration:"none",fontWeight:500,color:"#94a3b8",fontSize:11}}>({grpItems.length})</span>
                   <button onClick={()=>renameSubcat(item.catId,g)} title="Rename this sub-category" style={{marginLeft:8,background:"none",border:"none",cursor:"pointer",color:"#94a3b8",fontSize:12}}>✎</button></td></tr>}
+              {!folded&&<>
               <tr style={{borderBottom:"1px solid #f8fafc",background:checked?"#ede9fe":(ri%2===1?"#f5f3ff":"#fff")}}>
                 <td style={{padding:"2px 4px",textAlign:"center"}}><input type="checkbox" title="Click to select · Shift+click to select a range" checked={checked} onChange={()=>{}} onClick={e=>clickSel(e,item.id,items)} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
                 <td draggable onDragStart={e=>{e.dataTransfer.setData("text/bur",item.id);e.dataTransfer.effectAllowed="move";}} title="Drag me onto a category to move • click to expand" style={{padding:"2px 4px",textAlign:"center",cursor:"grab",color:isExp?"#2563eb":"#94a3b8",userSelect:"none"}} onClick={()=>setExpBur(isExp?null:item.id)}>⠿{isExp?"▼":"▶"}</td>
@@ -925,6 +934,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                   </div>)}
                 </div>
               </td></tr>)}
+              </>}
             </Fragment>);
           })}
         </tbody>
@@ -1129,6 +1139,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
                 <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
                 {codesMissingUnit.length>0&&<button onClick={addUnitToCodes} title="Append _unit to BUR codes (e.g. Acoustic_feltCeiling → Acoustic_feltCeiling_m2)" style={{background:"#fff7ed",color:"#c2410c",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>+ _unit to {codesMissingUnit.length} codes</button>}
+                {shownSubKeys.length>0&&<><button onClick={()=>collapseAllSubs(true)} title="Fold every sub-category in this list" style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>▸ Collapse all</button><button onClick={()=>collapseAllSubs(false)} title="Unfold every sub-category in this list" style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>▾ Expand all</button></>}
                 {undoLabel&&<button onClick={undoLast} title={"Undo: "+undoLabel+" (Ctrl+Z)"} style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",maxWidth:260,overflow:"hidden",textOverflow:"ellipsis"}}>↶ Undo: {undoLabel}</button>}
                 <label title="Match items to a master BUR.xlsx by code and set their category + sub-category (underlined headings in column B). Codes, rates, quotes and photos are not changed." style={{background:"#f5f3ff",color:"#6d28d9",border:"1px solid #c4b5fd",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>☰ Sync categories from Excel…<input type="file" accept=".xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files[0]; e.target.value=""; subcatsFromExcel(f);}}/></label>
                 <label title="Clear this project's BUR and load all items from a master BUR.xlsx (a backup downloads first)" style={{background:"#fef2f2",color:"#b91c1c",border:"1px solid #fca5a5",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⟳ Replace BUR from Excel…<input type="file" accept=".xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files[0]; e.target.value=""; replaceBurFromExcel(f);}}/></label>
