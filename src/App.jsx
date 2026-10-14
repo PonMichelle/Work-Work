@@ -795,6 +795,20 @@ export default function App(){
       for(let i=0;i<changes.length;i+=400){const batch=writeBatch(db); changes.slice(i,i+400).forEach(({id,m})=>batch.update(doc(db,"bur",id),{catId:catIdOf(m.cat),group:m.group,ord:m.ord})); await batch.commit();}
       toast_(`✅ Updated ${changes.length} item(s)${moves.length?` (${moves.length} moved category)`:""}`);
     }catch(e){ toast_("⚠️ "+(e&&e.message||e)); } };
+  // Duplicate items with everything (rates, waste, extra items, quotes, photos, category & sub-category).
+  // The copy gets a free code like "X_copy_m2" (then _copy2, _copy3…) so it never clashes; a single copy opens for editing.
+  const copyItems=async ids=>{ const src=ids.map(id=>burItemsRef.current.find(x=>x.id===id)).filter(Boolean); if(!src.length)return;
+    const taken=new Set(burItemsRef.current.map(b=>String(b.code||"").trim().toLowerCase())); const newIds=[];
+    try{ for(let i=0;i<src.length;i+=400){ const batch=writeBatch(db);
+        src.slice(i,i+400).forEach(b=>{ const {id:_id,...data}=JSON.parse(JSON.stringify(b)); let code=data.code||"";
+          if(code){ const base=codeBase(code,b.unit); let n=1; do{ code=codeWithUnit(`${base}_copy${n>1?n:""}`,b.unit); n++; }while(taken.has(code.toLowerCase())); taken.add(code.toLowerCase()); }
+          data.costData=(data.costData||[]).map(e=>({...e,id:uid()})); data.extras=(data.extras||[]).map(x=>({...x,id:uid()})); if(data.ord!=null)data.ord=+data.ord+0.001;
+          const ref=doc(collection(db,"bur")); newIds.push(ref.id); batch.set(ref,{...data,code,pid:b.pid||pid}); });
+        await batch.commit(); }
+      pushUndo({kind:"created",label:`Copy ${newIds.length} item(s)`,ids:newIds});
+      if(newIds.length===1)setExpBur(newIds[0]); else clearSel();
+      toast_(newIds.length===1?"⧉ Copied — edit the new item below":`⧉ Copied ${newIds.length} item(s)`);
+    }catch(e){ toast_("⚠️ Copy failed: "+(e&&e.message||e)); } };
   const bulkDelete=async()=>{ const ids=[...selBur]; if(!ids.length)return;
     if(!confirm(`Delete ${ids.length} BUR item(s)?
 
@@ -853,7 +867,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
   const burTableEl=items=>(
     <div style={{background:"#fff",borderRadius:8,boxShadow:"0 1px 4px rgba(0,0,0,.08)",overflow:"auto"}}>
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,tableLayout:"fixed"}}>
-        <colgroup><col style={{width:28}}/><col style={{width:24}}/>{burHead.map(([k])=><col key={k} style={{width:burCw(k)}}/>)}<col style={{width:34}}/></colgroup>
+        <colgroup><col style={{width:28}}/><col style={{width:24}}/>{burHead.map(([k])=><col key={k} style={{width:burCw(k)}}/>)}<col style={{width:52}}/></colgroup>
         <thead><tr style={{background:"#fef9c3",color:"#92400e",fontSize:11}}>
           <th style={{borderBottom:"1px solid #fde68a",textAlign:"center"}}><input type="checkbox" title="Select all shown" checked={items.length>0&&items.every(it=>selBur.has(it.id))} onChange={e=>{setSelBur(prev=>{const s=new Set(prev); items.forEach(it=>e.target.checked?s.add(it.id):s.delete(it.id)); return s;});}} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></th>
           <th style={{borderBottom:"1px solid #fde68a"}}></th>
@@ -880,7 +894,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.plant?item.plant:""} onChange={e=>updBur(item.id,{plant:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 8px",textAlign:"right",fontWeight:700,color:"#1d4ed8",whiteSpace:"nowrap"}}>{total>0?<span title={hasRoundUp(item)?`Rounded up (${+item.roundUp===0?"whole $":"1 decimal"})`:""}>{hasRoundUp(item)&&<span style={{color:"#7c3aed",fontSize:10,marginRight:2}}>↑</span>}{fmt(total)}</span>:""}</td>
                 <td style={{padding:"3px 6px",textAlign:"center"}}><button onClick={()=>{setCostModal(item.id);setCType("subcon");}} style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#92400e",fontWeight:600,whiteSpace:"nowrap"}}>📊{cdCount?` ${cdCount}`:""}</button></td>
-                <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>delBur(item.id)} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700}}>✕</button></td>
+                <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>copyItems([item.id])} title="Copy this item (all details, quotes & photos)" style={{border:"none",background:"none",color:"#2563eb",cursor:"pointer",fontSize:13,fontWeight:700,padding:"0 3px"}}>⧉</button><button onClick={()=>delBur(item.id)} title="Delete" style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700,padding:"0 3px"}}>✕</button></td>
               </tr>
               {isExp&&(<tr><td colSpan={11} style={{background:"#fafafa",padding:"12px 16px",borderBottom:"1px solid #eef2f7"}}>
                 <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:12}}>
@@ -1138,6 +1152,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <span style={{fontSize:11,color:"#475569"}}>Set unit:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkSetUnit(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Unit…</option>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetRound(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Round up…</option>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
+                <button onClick={()=>copyItems([...selBur])} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>⧉ Copy {selBur.size}</button>
                 <button onClick={bulkDelete} style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>🗑 Delete {selBur.size}</button>
                 <button onClick={clearSel} style={{marginLeft:"auto",background:"#fff",border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#5b21b6",fontWeight:600}}>Clear</button>
               </div>}
