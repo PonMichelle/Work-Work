@@ -676,6 +676,9 @@ export default function App(){
     return {...(was?{}:{preTick:{labour:+b.labour||0,material:+b.material||0,plant:+b.plant||0,subcon:+b.subcon||0}}),
       labour:sum("labour"),material:sum("material"),plant:sum("plant"),subcon:sum("subcon"),
       extras:[...manual,...customs.map(c=>({id:"cd_"+c,name:compLabel(c),type:"$",value:sum(c),fromCD:true}))]}; };
+  const deleteHiddenEntries=()=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(!b)return; const gone=(b.costData||[]).filter(e=>!tabExists(e.component)); if(!gone.length)return;
+    if(!confirm(`Delete ${gone.length} hidden entr${gone.length>1?"ies":"y"} left over from removed tabs?\n(${gone.map(e=>`${e.supplier||"?"} S$ ${fmt(+e.rate||0)}`).join(", ")})\n\nYou can Undo.`))return;
+    const cd=(b.costData||[]).filter(e=>tabExists(e.component)); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); toast_(`🗑 Deleted ${gone.length} hidden entr${gone.length>1?"ies":"y"}`); };
   const clearHiddenTicks=()=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).map(e=>e.inRate&&!tabExists(e.component)?{...e,inRate:false}:e); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); toast_("✅ Removed entries of deleted tabs from the rate"); };
   const toggleInRate=eid=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).map(e=>e.id===eid?{...e,inRate:!e.inRate}:e); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); };
   const allComps=[...COMPS,...ccomps.map(c=>c.key)];
@@ -915,7 +918,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
         </tr></thead>
         <tbody>
           {items.map((item,ri)=>{
-            const isExp=expBur===item.id; const total=bTot(item); const direct=baseDirect(item); const xs=item.extras||[]; const setXs=v=>updBur(item.id,{extras:v}); const cdCount=(item.costData||[]).length; const dup=isDupCode(item.code); const checked=selBur.has(item.id);
+            const isExp=expBur===item.id; const total=bTot(item); const direct=baseDirect(item); const xs=item.extras||[]; const setXs=v=>updBur(item.id,{extras:v}); const cdVis=(item.costData||[]).filter(e=>tabExists(e.component)), cdCount=cdVis.length, cdTip=Object.entries(cdVis.reduce((o,e)=>{const l=compLabel(e.component);o[l]=(o[l]||0)+1;return o;},{})).map(([l,n])=>`${l}: ${n}`).join(" · "); const dup=isDupCode(item.code); const checked=selBur.has(item.id);
             const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2}; const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
             const g=String(item.group||"").trim(), folded=burGrouped&&!!g&&collapsedSubs.has(subKey(item.catId,g)), newGrp=burGrouped&&g&&(ri===0||String(items[ri-1].group||"").trim()!==g), grpItems=newGrp?items.filter(x=>String(x.group||"").trim()===g):[];
             return(<Fragment key={item.id}>
@@ -933,7 +936,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.material?item.material:""} onChange={e=>updBur(item.id,{material:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.plant?item.plant:""} onChange={e=>updBur(item.id,{plant:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 8px",textAlign:"right",fontWeight:700,color:"#1d4ed8",whiteSpace:"nowrap"}}>{total>0?<span title={hasRoundUp(item)?`Rounded up (${+item.roundUp===0?"whole $":"1 decimal"})`:""}>{hasRoundUp(item)&&<span style={{color:"#7c3aed",fontSize:10,marginRight:2}}>↑</span>}{fmt(total)}</span>:""}</td>
-                <td style={{padding:"3px 6px",textAlign:"center"}}><button onClick={()=>{setCostModal(item.id);setCType("subcon");}} style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#92400e",fontWeight:600,whiteSpace:"nowrap"}}>📊{cdCount?` ${cdCount}`:""}</button></td>
+                <td style={{padding:"3px 6px",textAlign:"center"}}><button onClick={()=>{setCostModal(item.id);setCType("subcon");}} title={cdTip||"No cost data yet"} style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#92400e",fontWeight:600,whiteSpace:"nowrap"}}>📊{cdCount?` ${cdCount}`:""}</button></td>
                 <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>copyItems([item.id])} title="Copy this item (all details, quotes & photos)" style={{border:"none",background:"none",color:"#2563eb",cursor:"pointer",fontSize:13,fontWeight:700,padding:"0 3px"}}>⧉</button><button onClick={()=>delBur(item.id)} title="Delete" style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700,padding:"0 3px"}}>✕</button></td>
               </tr>
               {isExp&&(<tr><td colSpan={11} style={{background:"#fafafa",padding:"12px 16px",borderBottom:"1px solid #eef2f7"}}>
@@ -1599,7 +1602,11 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
             </div>
             <div style={{flex:1,overflow:"auto",padding:"16px 20px"}}>
               {(()=>{ const hid=(modalItem.costData||[]).filter(e=>e.inRate&&!tabExists(e.component));
-                const warn=hid.length>0&&<div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px",marginBottom:8,fontSize:12,color:"#991b1b",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>⚠️ {hid.length} ticked entr{hid.length>1?"ies are":"y is"} on a removed tab (S$ {fmt(hid.reduce((t,e)=>t+cdRate(e),0))}) and still in this item's rate. <button onClick={clearHiddenTicks} style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>Remove from rate</button></div>;
+                const gone=(modalItem.costData||[]).filter(e=>!tabExists(e.component));
+                const warn=gone.length>0&&<div style={{background:hid.length?"#fef2f2":"#f8fafc",border:"1px solid "+(hid.length?"#fecaca":"#e2e8f0"),borderRadius:8,padding:"8px 12px",marginBottom:8,fontSize:12,color:hid.length?"#991b1b":"#475569",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  {hid.length?<>⚠️ {hid.length} ticked entr{hid.length>1?"ies are":"y is"} on a removed tab (S$ {fmt(hid.reduce((t,e)=>t+cdRate(e),0))}) and still in this item's rate.</>:<>ℹ️ {gone.length} entr{gone.length>1?"ies":"y"} from removed tabs {gone.length>1?"are":"is"} hidden (not counted).</>}
+                  {hid.length>0&&<button onClick={clearHiddenTicks} style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>Remove from rate</button>}
+                  <button onClick={deleteHiddenEntries} style={{background:"#fff",color:"#b91c1c",border:"1px solid #fca5a5",borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>🗑 Delete hidden entries</button></div>;
                 const t=(modalItem.costData||[]).filter(e=>e.inRate&&tabExists(e.component)); if(!t.length)return warn|| <div style={{fontSize:11,color:"#94a3b8",marginBottom:10}}>💡 Tick ✓ entries on any tab (Labour, Material, Mould, Freight…) to add them up into this item's rate per {modalItem.unit}.</div>;
                 const by={}; t.forEach(e=>{ by[e.component]=(by[e.component]||0)+cdRate(e); });
                 return <>{warn}<div style={{background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:12,color:"#065f46",display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
