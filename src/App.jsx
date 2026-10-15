@@ -902,6 +902,19 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
     if(!confirm(`Add "_unit" to ${list.length} BUR code(s)?\n\ne.g. ${list[0].code}  →  ${codeWithUnit(list[0].code,list[0].unit)}\n\nBOQ rows and Master BQ templates using the old codes will still match.`))return;
     try{ _u(); for(let i=0;i<list.length;i+=400){ const batch=writeBatch(db); list.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{code:codeWithUnit(b.code,b.unit)})); await batch.commit(); } toast_(`✅ Updated ${list.length} code(s)`); }catch(e){ toast_("⚠️ "+e.message); } };
   // Set Waste/ OH % on all selected items at once (e.g. 10%).
+  // Add (or update) one lump-sum extra item on every selected item, e.g. "conc pump" S$ 10. Same name (any case) = update its amount;
+  // amount 0 / empty = remove that extra item. The amount may be a formula.
+  const bulkAddExtra=async()=>{ const ids=[...selBur]; if(!ids.length)return;
+    const name=prompt(`Extra item name for ${ids.length} selected item(s) (e.g. conc pump):`,""); if(name==null||!name.trim())return;
+    const amt=prompt(`Amount S$ per unit for "${name.trim()}" (number or formula; 0 = remove it):`,""); if(amt==null)return;
+    const n=String(amt).trim()===""?0:calcExpr(amt); if(!isFinite(n)){toast_("⚠️ Amount has a mistake — check the number / formula");return;}
+    const nm=name.trim(), key=nm.toLowerCase(), isF=/[-+*/()]/.test(String(amt).replace(/^\s*[=-]/,""));
+    recordFields(ids,["extras"],`Extra "${nm}" on ${ids.length} item(s)`);
+    try{ for(let i=0;i<ids.length;i+=400){ const batch=writeBatch(db);
+        ids.slice(i,i+400).forEach(id=>{ const b=burItemsRef.current.find(x=>x.id===id); if(!b)return; const xs=(b.extras||[]).filter(x=>!(String(x.name||"").trim().toLowerCase()===key&&!x.fromCD));
+          batch.update(doc(db,"bur",id),{extras:n?[...xs,{id:uid(),name:nm,type:"$",value:Math.round(n*10000)/10000,...(isF?{expr:String(amt).trim()}:{})}]:xs}); });
+        await batch.commit(); }
+      toast_(n?`✅ "${nm}" S$ ${fmt(n)} on ${ids.length} item(s)`:`✅ Removed "${nm}" from ${ids.length} item(s)`); clearSel(); }catch(e){ toast_("⚠️ "+e.message); } };
   const bulkSetDiscount=async v=>{ const ids=[...selBur]; if(!ids.length)return; let d=v;
     if(v==="__custom"){ const t=prompt("Discount % for the selected item(s):","5"); if(t==null)return; d=t; }
     const val=+String(d).replace(/%/g,"").trim(); if(!isFinite(val)){toast_("⚠️ Enter a number");return;}
@@ -1214,6 +1227,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <select value="" onChange={e=>{if(e.target.value)bulkMoveCat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Category…</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
                 <span style={{fontSize:11,color:"#475569"}}>Set unit:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkSetUnit(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Unit…</option>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                <button onClick={bulkAddExtra} title="Add or update a lump-sum extra item (e.g. conc pump S$ 10) on all selected items" style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>＋ Extra item…</button>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetDiscount(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Discount…</option>{[2,5,10,15].map(m=><option key={m} value={m}>{m}%</option>)}<option value="__custom">Other %…</option><option value="0">None (0%)</option></select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetWaste(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Waste/ OH…</option>{[5,10,15,20].map(m=><option key={m} value={m}>{m}%</option>)}<option value="__custom">Other %…</option><option value="0">None (0%)</option></select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetRound(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Round up…</option>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
