@@ -73,9 +73,12 @@ const fmt=n=>(n||0).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFract
 // Resize/compress an image File or Blob to a small JPEG data URL (for storing quote photos).
 // Aggressively shrink a data-URL image for embedding into Excel (small dimensions + low quality).
 // Work out a typed calculation like "((1+1)*2)+((3*1)+2)" or "=12.5*1.1". Only numbers, + - * / and brackets; returns NaN if invalid.
-const calcExpr=str=>{ const s=String(str??"").replace(/^\s*=/,"").replace(/\s+/g,""); if(!s||/[^0-9.+\-*/()]/.test(s))return NaN; let i=0;
+// A BUR code inside a formula stands for that item's current rate, e.g. "=rebar+0.13". The app sets exprLookup (code -> rate).
+let exprLookup=null;
+const exprRefs=str=>(String(str??"").replace(/^\s*=/,"").match(/[A-Za-z_][A-Za-z0-9_.]*/g)||[]);
+const calcExpr=str=>{ const s=String(str??"").replace(/^\s*=/,"").replace(/\s+/g,""); if(!s||/[^0-9A-Za-z_.+\-*/()]/.test(s))return NaN; let i=0;
   const num=()=>{ const m=/^\d+\.?\d*|^\.\d+/.exec(s.slice(i)); if(!m)return NaN; i+=m[0].length; return parseFloat(m[0]); };
-  const fac=()=>{ if(s[i]==="-"){i++;return -fac();} if(s[i]==="+"){i++;return fac();} if(s[i]==="("){i++; const v=sum(); if(s[i]!==")")return NaN; i++; return v;} return num(); };
+  const fac=()=>{ if(/[A-Za-z_]/.test(s[i]||"")){ const m=/^[A-Za-z_][A-Za-z0-9_.]*/.exec(s.slice(i)); i+=m[0].length; return exprLookup?+exprLookup(m[0]):NaN; } if(s[i]==="-"){i++;return -fac();} if(s[i]==="+"){i++;return fac();} if(s[i]==="("){i++; const v=sum(); if(s[i]!==")")return NaN; i++; return v;} return num(); };
   const prod=()=>{ let v=fac(); while(s[i]==="*"||s[i]==="/"){ const op=s[i++], r=fac(); v=op==="*"?v*r:v/r; } return v; };
   const sum=()=>{ let v=prod(); while(s[i]==="+"||s[i]==="-"){ const op=s[i++], r=prod(); v=op==="+"?v+r:v-r; } return v; };
   const v=sum(); return i===s.length&&isFinite(v)?v:NaN; };
@@ -519,7 +522,7 @@ export default function App(){
       const HEAD=[[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[7,"Discount","center"],[8,"Quote","center"],[9,"%","center"],[10,"Waste/ OH","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"Extra items (S$)","left"],[SUP0,"Subcon / Supplier","center"]];
       HEAD.forEach(([c,t,h])=>put(5,c,t,{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:h,wrapText:true}}));
       put(5,photoCol,"Photos",{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:"center"}});
-      let r=7, count=0, photoCount=0; const catRows=new Set();
+      let r=7, count=0, photoCount=0; const catRows=new Set(); const codeRow={}, pendingF=[];
       for(const g of groups){
         // category heading row: name in A (orange), component labels, then supplier names over their rate columns
         put(r,1,g.name,{font:{bold:true,underline:true},fill:C_CAT,bd:1}); catRows.add(r);
@@ -553,21 +556,24 @@ export default function App(){
           if(wp){ put(r,9,wp/100,{nf:"0.##%",al:{horizontal:"center"}}); put(r,10,{formula:`(H${r}+K${r}+L${r}+M${r}+G${r})*I${r}`,result:wasteAmt(it)},{nf:NF,al:{horizontal:"center"}}); }
           // extra items: lump-sum S$ under their named column (N..Q)
           const xsum={}, xnote={}; (it.extras||[]).forEach(x=>{ const c=g.xcol(String(x.name||"").trim()||"Other"); xsum[c]=(xsum[c]||0)+extraAmt(it,x); (xnote[c]=xnote[c]||[]).push(`${x.name||"Other"}: S$ ${extraAmt(it,x).toFixed(2)}`); });
-          Object.entries(xsum).forEach(([c,v])=>{ const own=(it.extras||[]).filter(x=>g.xcol(String(x.name||"").trim()||"Other")===+c), ex=own.length===1&&own[0].type!=="%"&&/[-+*/()]/.test(String(own[0].expr||"").replace(/^\s*[=-]/,""))?String(own[0].expr).replace(/^\s*=/,"").replace(/\s+/g,""):null;
+          Object.entries(xsum).forEach(([c,v])=>{ const own=(it.extras||[]).filter(x=>g.xcol(String(x.name||"").trim()||"Other")===+c), xRef=own.length===1&&exprRefs(own[0].expr).length>0, ex=!xRef&&own.length===1&&own[0].type!=="%"&&/[-+*/()]/.test(String(own[0].expr||"").replace(/^\s*[=-]/,""))?String(own[0].expr).replace(/^\s*=/,"").replace(/\s+/g,""):null;
             // a typed calculation goes into Excel as a real formula, e.g. =((1+1)*2)+((3*1)+2)
-            const xc=put(r,+c,ex&&isFinite(calcExpr(ex))?{formula:ex,result:+v.toFixed(4)}:(+v.toFixed(4)||null),{nf:NF,al:{horizontal:"center"}}); if(xnote[c].length>1||g.xcols[+c-14]==="Others")xc.note=xnote[c].join("\n"); });
-          Object.entries(latest).forEach(([k,e])=>{ const qx=e.expr&&/[-+*/()]/.test(String(e.expr).replace(/^\s*[=-]/,""))&&isFinite(calcExpr(e.expr))?String(e.expr).replace(/^\s*=/,"").replace(/\s+/g,""):null; const cell=put(r,SUP0+g.supIdx[k],qx?{formula:qx,result:+e.rate||0}:(+e.rate||0),{fill:used.has(k)?C_SEL:C_OTHER,nf:NF,al:{horizontal:"center",wrapText:true}});
+            const xc=put(r,+c,ex&&isFinite(calcExpr(ex))?{formula:ex,result:+v.toFixed(4)}:(+v.toFixed(4)||null),{nf:NF,al:{horizontal:"center"}}); if(xRef)pendingF.push({cell:xc,expr:own[0].expr}); if(xnote[c].length>1||g.xcols[+c-14]==="Others")xc.note=xnote[c].join("\n"); });
+          Object.entries(latest).forEach(([k,e])=>{ const qRef=exprRefs(e.expr).length>0, qx=!qRef&&e.expr&&/[-+*/()]/.test(String(e.expr).replace(/^\s*[=-]/,""))&&isFinite(calcExpr(e.expr))?String(e.expr).replace(/^\s*=/,"").replace(/\s+/g,""):null; const cell=put(r,SUP0+g.supIdx[k],qx?{formula:qx,result:+e.rate||0}:(+e.rate||0),{fill:used.has(k)?C_SEL:C_OTHER,nf:NF,al:{horizontal:"center",wrapText:true}}); if(qRef)pendingF.push({cell,expr:e.expr});
             const note=[e.component&&e.component!=="subcon"&&(CLABEL[e.component]||(ccomps.find(x=>x.key===e.component)||{}).label||e.component),e.location&&`@ ${e.location}`,e.date&&`Date: ${e.date}`,e.note].filter(Boolean).join("\n"); if(note)cell.note=note; });
           // embed this item's photos after the supplier columns, on the same row
           const itemPhotos=(it.costData||[]).flatMap(e=>e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[])).slice(0,12);
           // full stored photo (no re-compression), shown up to 210x160 px keeping its shape; enlarging it in Excel stays sharp
           if(itemPhotos.length){ row.height=124; for(let i=0;i<itemPhotos.length;i++){ try{ const m=/^data:image\/(\w+);base64,(.+)$/.exec(itemPhotos[i]); if(m){ const {w,h}=await imgSize(itemPhotos[i]); const k=Math.min(210/w,160/h,1); const id=wb.addImage({base64:m[2],extension:/png/i.test(m[1])?"png":"jpeg"}); ws.addImage(id,{tl:{col:photoCol-1+i,row:r-1},ext:{width:Math.round(w*k),height:Math.round(h*k)}}); photoCount++; } }catch{} } }
+          if(it.code){ codeRow[String(it.code).trim().toLowerCase()]=r; codeRow[codeBase(it.code,it.unit).toLowerCase()]=r; }
           r++; count++;
         }
         r++; // blank row between categories
       }
       // Colour whole rows/columns like the master sheet: header row yellow, category rows orange, and every column keeps its
       // colour all the way down (grey text area, purple Rate, cyan Quote, pink %, pale blue build-up, pink supplier quotes).
+      // turn code-linked formulas into Excel links to the linked item's Rate cell, e.g. =rebar+0.13 -> =$E$1903+0.13
+      pendingF.forEach(({cell,expr})=>{ let ok=true; const f=String(expr).replace(/^\s*=/,"").replace(/\s+/g,"").replace(/[A-Za-z_][A-Za-z0-9_.]*/g,m=>{ const row=codeRow[m.toLowerCase()]; if(!row){ok=false;return m;} return "$E$"+row; }); if(ok)cell.value={formula:f,result:typeof cell.value==="number"?cell.value:undefined}; });
       const lastCol=SUP0+Math.max(maxSup,4)-1;
       const colFill=c=>c===5?C_RATE:c===8?C_QUOTE:c===9?"FFE6B8B7":(c>=10&&c<=17)?"FFDDEBF7":(c>=SUP0&&c<=lastCol)?C_OTHER:c===7?"FFFDE2E2":"FFF2F2F2";
       for(let rr=5;rr<r;rr++) for(let c=1;c<=lastCol;c++){ const cell=ws.getCell(rr,c); if(cell.fill&&cell.fill.type==="pattern")continue;
@@ -684,10 +690,24 @@ export default function App(){
     if(!confirm(`Delete ${gone.length} hidden entr${gone.length>1?"ies":"y"} left over from removed tabs?\n(${gone.map(e=>`${e.supplier||"?"} S$ ${fmt(+e.rate||0)}`).join(", ")})\n\nYou can Undo.`))return;
     const cd=(b.costData||[]).filter(e=>tabExists(e.component)); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); toast_(`🗑 Deleted ${gone.length} hidden entr${gone.length>1?"ies":"y"}`); };
   const clearHiddenTicks=()=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).map(e=>e.inRate&&!tabExists(e.component)?{...e,inRate:false}:e); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); toast_("✅ Removed entries of deleted tabs from the rate"); };
+  exprLookup=code=>{ const b=findBurByCode(burItemsRef.current,code); return b?bTot(b):NaN; };
+  // When an item's rate changes, every quote / extra item whose formula names its code (e.g. =rebar+0.13) is recalculated and saved.
+  // Items in a reference loop (A uses B, B uses A) are left alone.
+  useEffect(()=>{ if(!burItems.length)return; const t=setTimeout(async()=>{
+      const items=burItemsRef.current; const refsOf=b=>[...(b.costData||[]).map(e=>e.expr),...(b.extras||[]).map(x=>x.expr)].flatMap(exprRefs);
+      const inLoop=b=>{ const seen=new Set(), stack=[...refsOf(b)]; while(stack.length){ const tgt=findBurByCode(items,stack.pop()); if(!tgt)continue; if(tgt.id===b.id)return true; if(seen.has(tgt.id))continue; seen.add(tgt.id); stack.push(...refsOf(tgt)); } return false; };
+      const ups=[];
+      items.forEach(b=>{ if(!refsOf(b).length||inLoop(b))return; let changed=false;
+        const cd=(b.costData||[]).map(e=>{ if(!exprRefs(e.expr).length)return e; const n=calcExpr(e.expr); if(isFinite(n)&&Math.abs(n-(+e.rate||0))>0.00005){changed=true;return {...e,rate:Math.round(n*10000)/10000};} return e; });
+        const xs=(b.extras||[]).map(x=>{ if(!exprRefs(x.expr).length)return x; const n=calcExpr(x.expr); if(isFinite(n)&&Math.abs(n-(+x.value||0))>0.00005){changed=true;return {...x,value:Math.round(n*10000)/10000};} return x; });
+        if(changed)ups.push([b.id,{costData:cd,extras:xs,...(cd.some(e=>e.inRate)?tickPatch({...b,extras:xs},cd):{})}]); });
+      if(!ups.length)return;
+      try{ for(let i=0;i<ups.length;i+=400){ const batch=writeBatch(db); ups.slice(i,i+400).forEach(([id,pt])=>batch.update(doc(db,"bur",id),pt)); await batch.commit(); } }catch{}
+    },1500); return ()=>clearTimeout(t); },[burItems]);
   const toggleInRate=eid=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).map(e=>e.id===eid?{...e,inRate:!e.inRate}:e); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); };
   const allComps=[...COMPS,...ccomps.map(c=>c.key)];
 
-  const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!String(cForm.rate).trim()){toast_("⚠️ Enter supplier and rate");return;} const rv=calcExpr(cForm.rate); if(!isFinite(rv)){toast_("⚠️ Rate formula has a mistake — check brackets / symbols");return;} const rExpr=/[-+*/()]/.test(String(cForm.rate).replace(/^\s*[=-]/,""))?String(cForm.rate).trim():""; const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:Math.round(rv*10000)/10000,...(rExpr?{expr:rExpr}:{}),date:cForm.date,location:cForm.location||"",note:cForm.note,imgs:cForm.imgs||[]}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",location:"",note:"",imgs:[]}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
+  const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!String(cForm.rate).trim()){toast_("⚠️ Enter supplier and rate");return;} const rv=calcExpr(cForm.rate); if(!isFinite(rv)){toast_("⚠️ Rate formula has a mistake — check brackets / symbols");return;} const rExpr=(/[-+*/()]/.test(String(cForm.rate).replace(/^\s*[=-]/,""))||exprRefs(cForm.rate).length>0)?String(cForm.rate).trim():""; const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:Math.round(rv*10000)/10000,...(rExpr?{expr:rExpr}:{}),date:cForm.date,location:cForm.location||"",note:cForm.note,imgs:cForm.imgs||[]}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",location:"",note:"",imgs:[]}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
   const pickCostImg=useCallback(async files=>{ const list=files&&files.length!=null?[...files]:(files?[files]:[]); if(!list.length)return; const out=[]; for(const file of list){ const d=await imgToDataURL(file); if(d&&d.length<=1400000)out.push(d); else if(d)toast_("⚠️ One image too large, skipped"); } if(out.length)setCForm(f=>({...f,imgs:[...(f.imgs||[]),...out]})); },[toast_]);
   const delCostEntry=useCallback(eid=>{ const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).filter(e=>e.id!==eid); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); },[costModal,burItems,ccomps]);
   // Edit an existing cost-data entry (optimistic local + debounced save)
@@ -1707,7 +1727,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
               <div style={{background:"#f8fafc",borderRadius:10,padding:14,border:"1px solid #e2e8f0"}}>
                 <div style={{fontSize:12,fontWeight:600,color:"#475569",marginBottom:10}}>+ Add {compLabel(cType)} Quote / Price</div>
                 <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1.4fr 2fr",gap:8,marginBottom:10}}>
-                  {[["supplier","Supplier / Vendor","text","e.g. ABC Contractors Pte Ltd"],["rate","Rate (S$)","text","0.00 or =(100+20)/2"],["date","Date","text","e.g. Jun 2025"],["location","Location","text","e.g. Level 3 / Block A"],["note","Note","text","e.g. FOB, ex-GST"]].map(([k,l,t,ph])=>(
+                  {[["supplier","Supplier / Vendor","text","e.g. ABC Contractors Pte Ltd"],["rate","Rate (S$)","text","0.00, =(100+20)/2 or =rebar+0.13"],["date","Date","text","e.g. Jun 2025"],["location","Location","text","e.g. Level 3 / Block A"],["note","Note","text","e.g. FOB, ex-GST"]].map(([k,l,t,ph])=>(
                     <div key={k}><div style={{fontSize:10,color:"#94a3b8",marginBottom:3,fontWeight:600}}>{l}</div>
                     <input type={t} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:7,padding:"7px 9px",fontSize:12,outline:"none",boxSizing:"border-box"}} placeholder={ph} value={cForm[k]} onChange={e=>setCForm(f=>({...f,[k]:e.target.value}))}/>{k==="rate"&&/[-+*/()]/.test(String(cForm.rate).replace(/^\s*[=-]/,""))&&<div style={{fontSize:11,marginTop:2,color:isFinite(calcExpr(cForm.rate))?"#475569":"#ef4444"}}>{isFinite(calcExpr(cForm.rate))?`= S$ ${fmt(calcExpr(cForm.rate))}`:"check formula"}</div>}</div>
                   ))}
