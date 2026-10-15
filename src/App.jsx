@@ -140,7 +140,9 @@ const baseDirect=b=>(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0)
 const extraAmt=(b,x)=>x.type==="%"?baseDirect(b)*(+x.value||0)/100:(+x.value||0);
 const extrasTot=b=>(b.extras||[]).reduce((t,x)=>t+extraAmt(b,x),0);
 const wasteAmt=b=>baseDirect(b)*(+b.waste||0)/100;
-const bTot=b=>{const t=baseDirect(b)+wasteAmt(b)+extrasTot(b);if(!hasRoundUp(b))return t;const f=10**(+b.roundUp);return Math.ceil(t*f-1e-9)/f;};
+// item.markup = % added on top of (direct + waste + extra items), applied before any round-up.
+const preMarkup=b=>baseDirect(b)+wasteAmt(b)+extrasTot(b);
+const bTot=b=>{const t=preMarkup(b)*(1+(+b.markup||0)/100);if(!hasRoundUp(b))return t;const f=10**(+b.roundUp);return Math.ceil(t*f-1e-9)/f;};
 // Custom BOQ columns: compute each column's value per row. Formula columns can reference
 // qty, rateA, rateB, amtA, amtB, and earlier custom columns (by sanitised name).
 // Compute custom BOQ columns. Formulas may use natural names: Qty, Rate A, Rate B,
@@ -542,8 +544,8 @@ export default function App(){
           const cc=put(r,4,codeOut,{al:{horizontal:"left",wrapText:true}});
           if((codeCount[(it.code||"").trim().toLowerCase()]||0)>1){ cc.fill=fill("FFFECACA"); cc.font={...F,bold:true,color:{argb:"FFB91C1C"}}; }
           const amt=bTot(it);
-          put(r,5,{formula:hasRoundUp(it)?`+ROUNDUP(F${r},${+it.roundUp})`:`+F${r}`,result:amt},{font:{bold:true},fill:C_RATE,nf:NF,al:{horizontal:"center"}});
-          put(r,6,{formula:`SUM(G${r}:Q${r})-I${r}`,result:bTot({...it,roundUp:null})},{nf:NF});
+          const mk=+it.markup||0, fr=mk?`F${r}*${1+mk/100}`:`F${r}`; put(r,5,{formula:hasRoundUp(it)?`+ROUNDUP(${fr},${+it.roundUp})`:`+${fr}`,result:amt},{font:{bold:true},fill:C_RATE,nf:NF,al:{horizontal:"center"}});
+          put(r,6,{formula:`SUM(G${r}:Q${r})-I${r}`,result:preMarkup(it)},{nf:NF});
           costCell(8,"subcon",sub); costCell(11,"labour",lab); costCell(12,"material",mat); costCell(13,"plant",pl);
           // waste: I = % (as a fraction, like the master sheet), J = (Quote+Labour+Material+Plant) x I
           if(wp){ put(r,9,wp/100,{nf:"0.##%",al:{horizontal:"center"}}); put(r,10,{formula:`(H${r}+K${r}+L${r}+M${r})*I${r}`,result:wasteAmt(it)},{nf:NF,al:{horizontal:"center"}}); }
@@ -896,6 +898,11 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
   const addUnitToCodes=async()=>{ const list=codesMissingUnit; if(!list.length)return; const _u=()=>recordFields(list.map(b=>b.id),["code"],`Add _unit to ${list.length} codes`);
     if(!confirm(`Add "_unit" to ${list.length} BUR code(s)?\n\ne.g. ${list[0].code}  →  ${codeWithUnit(list[0].code,list[0].unit)}\n\nBOQ rows and Master BQ templates using the old codes will still match.`))return;
     try{ _u(); for(let i=0;i<list.length;i+=400){ const batch=writeBatch(db); list.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{code:codeWithUnit(b.code,b.unit)})); await batch.commit(); } toast_(`✅ Updated ${list.length} code(s)`); }catch(e){ toast_("⚠️ "+e.message); } };
+  const bulkSetMarkup=async v=>{ const ids=[...selBur]; if(!ids.length)return; let m=v;
+    if(v==="__custom"){ const t=prompt("Markup % for the selected item(s):","10"); if(t==null)return; m=t; }
+    const val=+String(m).replace(/%/g,"").trim(); if(!isFinite(val)){toast_("⚠️ Enter a number");return;}
+    recordFields(ids,["markup"],`Markup ${val}% on ${ids.length} item(s)`);
+    try{ for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{markup:val})); await batch.commit();} toast_(val?`✅ Markup ${val}% on ${ids.length} item(s)`:`✅ Markup removed from ${ids.length} item(s)`); clearSel(); }catch(e){ toast_("⚠️ "+e.message); } };
   const bulkSetRound=async v=>{ const ids=[...selBur]; if(!ids.length)return; const val=v===""?null:+v; recordFields(ids,["roundUp"],`Round-up on ${ids.length} item(s)`); for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{roundUp:val})); await batch.commit();} toast_(`✅ ${val===null?"Exact rate":val===0?"Round up to whole $":"Round up to 1 decimal"} on ${ids.length} item(s)`); clearSel(); };
   const bulkSetUnit=async u=>{ const ids=[...selBur]; if(!ids.length||!u)return; recordFields(ids,["unit","code"],`Set unit on ${ids.length} item(s)`); for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>{ const b=burItemsRef.current.find(x=>x.id===id); batch.update(doc(db,"bur",id),b&&b.code?{unit:u,code:swapUnitTag(b.code,b.unit,u)}:{unit:u}); }); await batch.commit();} toast_(`✅ Set unit on ${ids.length} item(s)`); clearSel(); };
   const handleDropCat=(cid,e)=>{ e.preventDefault(); const id=e.dataTransfer.getData("text/bur"); if(!id)return; const ids=(selBur.has(id)&&selBur.size>1)?[...selBur]:[id]; moveItemsToCat(ids,cid).then(()=>{toast_(`✅ Moved ${ids.length} item(s)`);clearSel();}); };
@@ -935,7 +942,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.labour?item.labour:""} onChange={e=>updBur(item.id,{labour:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.material?item.material:""} onChange={e=>updBur(item.id,{material:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.plant?item.plant:""} onChange={e=>updBur(item.id,{plant:+e.target.value||0})}/></td>
-                <td style={{padding:"3px 8px",textAlign:"right",fontWeight:700,color:"#1d4ed8",whiteSpace:"nowrap"}}>{total>0?<span title={hasRoundUp(item)?`Rounded up (${+item.roundUp===0?"whole $":"1 decimal"})`:""}>{hasRoundUp(item)&&<span style={{color:"#7c3aed",fontSize:10,marginRight:2}}>↑</span>}{fmt(total)}</span>:""}</td>
+                <td style={{padding:"3px 8px",textAlign:"right",fontWeight:700,color:"#1d4ed8",whiteSpace:"nowrap"}}>{total>0?<span title={[+item.markup?`Markup ${+item.markup}%`:"",hasRoundUp(item)?`Rounded up (${+item.roundUp===0?"whole $":"1 decimal"})`:""].filter(Boolean).join(" · ")}>{+item.markup?<span style={{color:"#059669",fontSize:10,marginRight:3,fontWeight:700}}>+{+item.markup}%</span>:null}{hasRoundUp(item)&&<span style={{color:"#7c3aed",fontSize:10,marginRight:2}}>↑</span>}{fmt(total)}</span>:""}</td>
                 <td style={{padding:"3px 6px",textAlign:"center"}}><button onClick={()=>{setCostModal(item.id);setCType("subcon");}} title={cdTip||"No cost data yet"} style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:6,padding:"3px 8px",fontSize:11,cursor:"pointer",color:"#92400e",fontWeight:600,whiteSpace:"nowrap"}}>📊{cdCount?` ${cdCount}`:""}</button></td>
                 <td style={{padding:"3px 4px",textAlign:"center"}}><button onClick={()=>copyItems([item.id])} title="Copy this item (all details, quotes & photos)" style={{border:"none",background:"none",color:"#2563eb",cursor:"pointer",fontSize:13,fontWeight:700,padding:"0 3px"}}>⧉</button><button onClick={()=>delBur(item.id)} title="Delete" style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700,padding:"0 3px"}}>✕</button></td>
               </tr>
@@ -947,10 +954,11 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
                   <div><label style={lbl}>SUBCON (S$)</label><input type="number" style={{...inp,width:90}} value={item.subcon?item.subcon:""} onChange={e=>updBur(item.id,{subcon:+e.target.value||0})}/></div>
                   <div><label style={lbl}>WASTE/ OH %</label><input type="number" style={{...inp,width:70}} placeholder="0" value={item.waste?item.waste:""} onChange={e=>updBur(item.id,{waste:+e.target.value||0})}/></div>
+                  <div><label style={lbl}>MARKUP %</label><input type="number" style={{...inp,width:70}} placeholder="0" value={item.markup?item.markup:""} onChange={e=>updBur(item.id,{markup:+e.target.value||0})}/></div>
                   <div><label style={lbl}>ROUND UP RATE</label><select style={{...inp,width:110}} value={hasRoundUp(item)?String(item.roundUp):""} onChange={e=>updBur(item.id,{roundUp:e.target.value===""?null:+e.target.value})}>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
                   <div><label style={lbl}>CATEGORY</label><select style={{...inp,background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
                   <div><label style={lbl}>SUB-CATEGORY</label><input list={"subcats_"+item.id} style={{...inp,width:200}} placeholder="(none)" value={item.group||""} onChange={e=>updBur(item.id,{group:e.target.value})}/><datalist id={"subcats_"+item.id}>{subcatsOf(item.catId).map(g=><option key={g} value={g}/>)}</datalist></div>
-                  <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b>{+item.waste?<> · Waste/ OH ({+item.waste}%) <b>S$ {fmt(wasteAmt(item))}</b></>:null}{xs.length?<> · Extras <b>S$ {fmt(extrasTot(item))}</b></>:null} · <span style={{color:"#1d4ed8",fontWeight:800}}>Rate S$ {fmt(total)}/{item.unit}</span></div>
+                  <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b>{+item.waste?<> · Waste/ OH ({+item.waste}%) <b>S$ {fmt(wasteAmt(item))}</b></>:null}{xs.length?<> · Extras <b>S$ {fmt(extrasTot(item))}</b></>:null}{+item.markup?<> · Markup ({+item.markup}%) <b>S$ {fmt(preMarkup(item)*(+item.markup)/100)}</b></>:null} · <span style={{color:"#1d4ed8",fontWeight:800}}>Rate S$ {fmt(total)}/{item.unit}</span></div>
                 </div>
                 <div style={{marginTop:12,paddingTop:10,borderTop:"1px dashed #e2e8f0"}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:xs.length?8:0}}>
@@ -1197,6 +1205,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <select value="" onChange={e=>{if(e.target.value)bulkMoveCat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Category…</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
                 <span style={{fontSize:11,color:"#475569"}}>Set unit:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkSetUnit(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Unit…</option>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetMarkup(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Markup…</option>{[5,10,15,20].map(m=><option key={m} value={m}>+{m}%</option>)}<option value="__custom">Other %…</option><option value="0">No markup</option></select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetRound(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Round up…</option>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
                 <button onClick={()=>copyItems([...selBur])} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>⧉ Copy {selBur.size}</button>
                 <button onClick={bulkDelete} style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>🗑 Delete {selBur.size}</button>
