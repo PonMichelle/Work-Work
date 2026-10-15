@@ -131,7 +131,9 @@ const parseBurWorkbook=(wb,catNames=[])=>{
 const orderBySubcat=list=>{ const first={}, minOrd={}; list.forEach((b,i)=>{ const g=String(b.group||"").trim(); if(!(g in first))first[g]=i; if(b.ord!=null)minOrd[g]=Math.min(minOrd[g]??Infinity,+b.ord); });
   const keys=Object.keys(first).sort((a,b)=>a===""?-1:b===""?1:((minOrd[a]??Infinity)-(minOrd[b]??Infinity))||a.localeCompare(b,undefined,{numeric:true}));
   return keys.flatMap(k=>list.filter(b=>String(b.group||"").trim()===k)); };
-const findBurByCode=(items,code)=>{ const k=String(code||"").trim().toLowerCase(); if(!k)return undefined; const lc=s=>String(s||"").trim().toLowerCase();
+// Codes with spaces or "/" (e.g. "cage_2SH/LH 10100") can't be used in formulas, so they get "_" instead; matching treats them as the same.
+const cleanCode=c=>String(c||"").trim().replace(/[\s/]+/g,"_");
+const findBurByCode=(items,code)=>{ const k=cleanCode(code).toLowerCase(); if(!k)return undefined; const lc=s=>cleanCode(s).toLowerCase();
   return items.find(b=>lc(b.code)===k)||items.find(b=>b.code&&(lc(codeBase(b.code,b.unit))===k||lc(codeWithUnit(b.code,b.unit))===k)); };
 const ROUND_OPTS=[["","Exact"],["0","Whole $"],["1","1 decimal"]];
 const hasRoundUp=b=>b&&b.roundUp!==undefined&&b.roundUp!==null&&b.roundUp!=="";
@@ -419,7 +421,7 @@ export default function App(){
       const wb=new ExcelJS.Workbook(); await wb.xlsx.load(buf);
       const codeMap={}; for(const b of burItems){ const k=(b.code||"").trim().toLowerCase(); if(k&&!codeMap[k])codeMap[k]=b; }
       // also match template codes written without (or with) the _unit suffix
-      for(const b of burItems){ if(!b.code)continue; for(const k of [codeBase(b.code,b.unit),codeWithUnit(b.code,b.unit)].map(s=>s.toLowerCase())) if(k&&!codeMap[k])codeMap[k]=b; }
+      for(const b of burItems){ if(!b.code)continue; for(const k of [codeBase(b.code,b.unit),codeWithUnit(b.code,b.unit),cleanCode(b.code),cleanCode(codeBase(b.code,b.unit))].map(s=>s.toLowerCase())) if(k&&!codeMap[k])codeMap[k]=b; }
       const toStr=v=>{ if(v==null)return ""; if(typeof v==="object"){ if(v.richText)return v.richText.map(t=>t.text).join(""); if(v.text!=null)return String(v.text); if(v.result!=null)return String(v.result); return ""; } return String(v); };
       let filled=0; const unmatched=new Set(); let scanned=0;
       wb.eachSheet(ws=>{
@@ -435,7 +437,7 @@ export default function App(){
           if(!toStr(row.getCell(cUnit).value).trim())continue;
           const code=toStr(row.getCell(cCode).value).trim(); if(!code)continue;
           scanned++;
-          const bur=codeMap[code.toLowerCase()]; if(!bur){unmatched.add(code);continue;}
+          const bur=codeMap[code.toLowerCase()]||codeMap[cleanCode(code).toLowerCase()]; if(!bur){unmatched.add(code);continue;}
           if(cMat&&cLab){ const m=+bur.material||0,l=+bur.labour||0; const mc=row.getCell(cMat); if(!mc.formula)mc.value=m>0?m:null; const lc=row.getCell(cLab); if(!lc.formula)lc.value=l>0?l:null; filled++; }
           else if(cRate){ const rc=row.getCell(cRate); if(!rc.formula){const t=+bTot(bur)||0; rc.value=t>0?t:null; filled++;} }
         }
@@ -918,6 +920,11 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
   };
   // One-off: append "_unit" to every BUR code in this project that doesn't already end with it.
   const codesMissingUnit=burItems.filter(b=>b.code&&codeWithUnit(b.code,b.unit)!==String(b.code).trim());
+  const codesWithSpaces=burItems.filter(b=>b.code&&cleanCode(b.code)!==String(b.code).trim());
+  const fixCodeSpaces=async()=>{ const list=codesWithSpaces; if(!list.length)return;
+    if(!confirm(`Replace spaces and "/" with "_" in ${list.length} BUR code(s)?\n\n${list.slice(0,6).map(b=>`${b.code}  →  ${cleanCode(b.code)}`).join("\n")}${list.length>6?"\n…":""}\n\nBOQ rows using the old spelling still match. You can Undo.`))return;
+    recordFields(list.map(b=>b.id),["code"],`Fix ${list.length} code(s) with spaces / "/"`);
+    try{ for(let i=0;i<list.length;i+=400){ const batch=writeBatch(db); list.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{code:cleanCode(b.code)})); await batch.commit(); } toast_(`✅ Fixed ${list.length} code(s)`); }catch(e){ toast_("⚠️ "+e.message); } };
   const addUnitToCodes=async()=>{ const list=codesMissingUnit; if(!list.length)return; const _u=()=>recordFields(list.map(b=>b.id),["code"],`Add _unit to ${list.length} codes`);
     if(!confirm(`Add "_unit" to ${list.length} BUR code(s)?\n\ne.g. ${list[0].code}  →  ${codeWithUnit(list[0].code,list[0].unit)}\n\nBOQ rows and Master BQ templates using the old codes will still match.`))return;
     try{ _u(); for(let i=0;i<list.length;i+=400){ const batch=writeBatch(db); list.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{code:codeWithUnit(b.code,b.unit)})); await batch.commit(); } toast_(`✅ Updated ${list.length} code(s)`); }catch(e){ toast_("⚠️ "+e.message); } };
@@ -980,7 +987,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <td draggable onDragStart={e=>{e.dataTransfer.setData("text/bur",item.id);e.dataTransfer.effectAllowed="move";}} title="Drag me onto a category to move • click to expand" style={{padding:"2px 4px",textAlign:"center",cursor:"grab",color:isExp?"#2563eb":"#94a3b8",userSelect:"none"}} onClick={()=>setExpBur(isExp?null:item.id)}>⠿{isExp?"▼":"▶"}</td>
                 <td style={{padding:"3px 6px",overflow:"hidden"}}><input style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent"}} value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})}/></td>
                 <td style={{padding:"3px 6px"}}><select style={{border:"none",fontSize:11,outline:"none",background:"transparent",width:"100%"}} value={item.unit||"sum"} onChange={e=>updBur(item.id,{unit:e.target.value,code:swapUnitTag(item.code,item.unit,e.target.value)})}>{unitOpts(item.unit).map(u=><option key={u}>{u}</option>)}</select></td>
-                <td style={{padding:"3px 6px",overflow:"hidden",background:dup?"#fee2e2":undefined}}><input title={dup?"⚠️ Duplicate BUR code":""} style={{width:"100%",border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:dup?"#b91c1c":"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})} onBlur={e=>{const c=codeWithUnit(e.target.value,item.unit); if(c!==e.target.value)updBur(item.id,{code:c});}}/></td>
+                <td style={{padding:"3px 6px",overflow:"hidden",background:dup?"#fee2e2":undefined}}><input title={dup?"⚠️ Duplicate BUR code":""} style={{width:"100%",border:"none",fontSize:11,outline:"none",background:"transparent",fontFamily:"monospace",fontWeight:700,color:dup?"#b91c1c":"#1d4ed8"}} value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})} onBlur={e=>{const c=codeWithUnit(cleanCode(e.target.value),item.unit); if(c!==e.target.value)updBur(item.id,{code:c});}}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.labour?item.labour:""} onChange={e=>updBur(item.id,{labour:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.material?item.material:""} onChange={e=>updBur(item.id,{material:+e.target.value||0})}/></td>
                 <td style={{padding:"3px 6px",textAlign:"right"}}><input type="number" style={{width:"100%",border:"none",fontSize:12,outline:"none",background:"transparent",textAlign:"right"}} value={item.plant?item.plant:""} onChange={e=>updBur(item.id,{plant:+e.target.value||0})}/></td>
@@ -991,7 +998,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
               {isExp&&(<tr><td colSpan={11} style={{background:"#fafafa",padding:"12px 16px",borderBottom:"1px solid #eef2f7"}}>
                 <div style={{display:"flex",gap:16,flexWrap:"wrap",marginBottom:12}}>
                   <div style={{flex:"2 1 320px"}}><label style={lbl}>DESCRIPTION (full)</label><textarea value={item.desc||""} onChange={e=>updBur(item.id,{desc:e.target.value})} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:6,padding:"7px 10px",fontSize:13,outline:"none",minHeight:64,resize:"vertical",boxSizing:"border-box",lineHeight:1.4}}/></div>
-                  <div style={{flex:"1 1 180px"}}><label style={lbl}>BUR CODE</label><input value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})} onBlur={e=>{const c=codeWithUnit(e.target.value,item.unit); if(c!==e.target.value)updBur(item.id,{code:c});}} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:6,padding:"7px 10px",fontSize:13,outline:"none",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8",boxSizing:"border-box"}}/></div>
+                  <div style={{flex:"1 1 180px"}}><label style={lbl}>BUR CODE</label><input value={item.code||""} onChange={e=>updBur(item.id,{code:e.target.value})} onBlur={e=>{const c=codeWithUnit(cleanCode(e.target.value),item.unit); if(c!==e.target.value)updBur(item.id,{code:c});}} style={{width:"100%",border:"1.5px solid #e2e8f0",borderRadius:6,padding:"7px 10px",fontSize:13,outline:"none",fontFamily:"monospace",fontWeight:700,color:"#1d4ed8",boxSizing:"border-box"}}/></div>
                 </div>
                 <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
                   <div><label style={lbl}>SUBCON (S$)</label><input type="number" style={{...inp,width:90}} value={item.subcon?item.subcon:""} onChange={e=>updBur(item.id,{subcon:+e.target.value||0})}/></div>
@@ -1222,6 +1229,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <label title="Limit the search to the category selected on the left" style={{display:"flex",alignItems:"center",gap:4,fontSize:12,color:"#475569",whiteSpace:"nowrap",cursor:"pointer"}}><input type="checkbox" checked={burSearchCat} onChange={e=>setBurSearchCat(e.target.checked)}/>Only in {catName(selCat)}</label>
                 {burSearch&&<button onClick={()=>setBurSearch("")} style={{background:"#f1f5f9",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>}
                 <button onClick={()=>{setPasteCat(selCat);setPasteOpen(true);}} style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>📋 Paste from Excel</button>
+                {codesWithSpaces.length>0&&<button onClick={fixCodeSpaces} title={"Codes with spaces or / can't be used in formulas:\n"+codesWithSpaces.slice(0,8).map(b=>b.code).join("\n")} style={{background:"#fff7ed",color:"#c2410c",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⚠ Fix {codesWithSpaces.length} code(s) with spaces / "/"</button>}
                 {codesMissingUnit.length>0&&<button onClick={addUnitToCodes} title="Append _unit to BUR codes (e.g. Acoustic_feltCeiling → Acoustic_feltCeiling_m2)" style={{background:"#fff7ed",color:"#c2410c",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>+ _unit to {codesMissingUnit.length} codes</button>}
                 {shownSubKeys.length>0&&<><button onClick={()=>collapseAllSubs(true)} title="Fold every sub-category in this list" style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>▸ Collapse all</button><button onClick={()=>collapseAllSubs(false)} title="Unfold every sub-category in this list" style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>▾ Expand all</button></>}
                 <button onClick={replaceUnit} title="Change one unit to another on all BUR items (e.g. nr → no.)" style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⇄ Replace unit…</button>
