@@ -776,7 +776,7 @@ export default function App(){
   const displayCats=cats;
   const sidebarCats=catSort==="none"?displayCats:[...displayCats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
   const catName=id=>displayCats.find(c=>c.id===id)?.name||id;
-  const BUR_MAX=200; const _q=burSearch.trim().toLowerCase();
+  const BUR_MAX=300; const _q=burSearch.trim().toLowerCase();
   // When searching, look across the WHOLE BUR library (unless "Only in this category" is ticked); otherwise show the selected category.
   // Several words = every word must appear (e.g. "ceiling nrc" in code, description, supplier or note).
   const _base=_q&&!burSearchCat?burItems:burItems.filter(b=>b.catId===selCat); const _words=_q.split(/\s+/).filter(Boolean);
@@ -789,7 +789,8 @@ export default function App(){
     return String(av).localeCompare(String(bv),undefined,{numeric:true})*sortDir;
   });
   const burGrouped=!(_q&&!burSearchCat); const _ordered=burGrouped?orderBySubcat(_sorted):_sorted;
-  const catTotal=_ordered.length; const catItems=_ordered.slice(0,BUR_MAX);
+  // a single category always shows ALL its items; only an all-categories search is capped (to keep the page fast)
+  const catTotal=_ordered.length; const catItems=burGrouped?_ordered:_ordered.slice(0,BUR_MAX);
   const subcatsOf=cid=>[...new Set(burItems.filter(b=>b.catId===cid).map(b=>String(b.group||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const saveCollapsed=st=>{ try{ localStorage.setItem("burCollapsedSubs",JSON.stringify([...st])); }catch{} return st; };
   const subKey=(cid,g)=>cid+"|"+g;
