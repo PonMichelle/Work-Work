@@ -286,7 +286,11 @@ export default function App(){
   useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","log"),s=>{ const e=s.exists()?(s.data().entries||[]):[]; logRef.current=e; setLog(e); }); },[ready]);
   useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","ccomps"),s=>setCcomps(s.exists()?(s.data().list||[]):[])); },[ready]);
   const addComponentTab=async()=>{ const name=prompt("New cost-data tab name (e.g. Equipment, Transport, Specialist):"); if(!name||!name.trim())return; const key="cc_"+Math.random().toString(36).slice(2,8); try{await setDoc(doc(db,"meta","ccomps"),{list:[...ccomps,{key,label:name.trim()}]});setCType(key);}catch(e){toast_("⚠️ "+e.message);} };
-  const delComponentTab=async key=>{ if(!confirm("Remove this tab? Existing entries stay in the data but the tab is hidden."))return; try{await setDoc(doc(db,"meta","ccomps"),{list:ccomps.filter(c=>c.key!==key)});}catch{} if(cType===key)setCType("subcon"); };
+  const delComponentTab=async key=>{ if(!confirm("Remove this tab? Its entries are hidden and no longer count in any rate."))return; try{await setDoc(doc(db,"meta","ccomps"),{list:ccomps.filter(c=>c.key!==key)});}catch{} if(cType===key)setCType("subcon");
+    const hit=burItemsRef.current.filter(b=>(b.costData||[]).some(e=>e.inRate&&e.component===key)); if(!hit.length)return;
+    try{ recordFields(hit.map(b=>b.id),["costData","labour","material","plant","subcon","extras","preTick"],`Remove tab from ${hit.length} rate(s)`);
+      for(let i=0;i<hit.length;i+=400){ const batch=writeBatch(db); hit.slice(i,i+400).forEach(b=>{ const cd=b.costData.map(e=>e.component===key&&e.inRate?{...e,inRate:false}:e); batch.update(doc(db,"bur",b.id),{costData:cd,...tickPatch(b,cd)}); }); await batch.commit(); }
+      toast_(`✅ Tab removed — ${hit.length} item rate(s) recalculated`); }catch(e){ toast_("⚠️ "+e.message); } };
 
   // ── Quote comparison ops ────────────────────────────────────────────────────
   const selComp=comparisons.find(c=>c.id===selCompId)||null;
@@ -663,13 +667,16 @@ export default function App(){
   // Ticked cost-data entries (e.inRate) make up the item's rate: Labour/Material/Plant/Subcon tabs fill those columns (sum of ticked),
   // every other tab (Mould, Freight, Accessories…) becomes an extra item named after the tab. Manually typed extra items are kept.
   // Before the first tick the old Labour/Material/Plant/Subcon are saved in item.preTick and put back when the last tick is removed.
-  const tickPatch=(b,cd)=>{ const manual=(b.extras||[]).filter(x=>!x.fromCD), was=(b.costData||[]).some(e=>e.inRate), now=cd.some(e=>e.inRate);
+  const tabExists=c=>COMPS.includes(c)||ccomps.some(x=>x.key===c);
+  const tickPatch=(b,cd)=>{ cd=cd.map(e=>e.inRate&&!tabExists(e.component)?{...e,inRate:false}:e); // entries on a removed tab never count
+    const manual=(b.extras||[]).filter(x=>!x.fromCD), was=(b.costData||[]).some(e=>e.inRate), now=cd.some(e=>e.inRate);
     if(!now){ if(!was)return {}; const pt=b.preTick||{}; return {labour:+pt.labour||0,material:+pt.material||0,plant:+pt.plant||0,subcon:+pt.subcon||0,preTick:null,extras:manual}; }
     const sum=c=>Math.round(cd.filter(e=>e.inRate&&e.component===c).reduce((t,e)=>t+cdRate(e),0)*10000)/10000;
     const customs=[...new Set(cd.filter(e=>e.inRate&&!COMPS.includes(e.component)).map(e=>e.component))];
     return {...(was?{}:{preTick:{labour:+b.labour||0,material:+b.material||0,plant:+b.plant||0,subcon:+b.subcon||0}}),
       labour:sum("labour"),material:sum("material"),plant:sum("plant"),subcon:sum("subcon"),
       extras:[...manual,...customs.map(c=>({id:"cd_"+c,name:compLabel(c),type:"$",value:sum(c),fromCD:true}))]}; };
+  const clearHiddenTicks=()=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).map(e=>e.inRate&&!tabExists(e.component)?{...e,inRate:false}:e); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); toast_("✅ Removed entries of deleted tabs from the rate"); };
   const toggleInRate=eid=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).map(e=>e.id===eid?{...e,inRate:!e.inRate}:e); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); };
   const allComps=[...COMPS,...ccomps.map(c=>c.key)];
 
@@ -1591,15 +1598,17 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
               <button onClick={addComponentTab} title="Add a tab" style={{padding:"9px 12px",fontSize:12,fontWeight:700,border:"none",color:"#7c3aed",background:"none",cursor:"pointer",whiteSpace:"nowrap"}}>＋ Tab</button>
             </div>
             <div style={{flex:1,overflow:"auto",padding:"16px 20px"}}>
-              {(()=>{ const t=(modalItem.costData||[]).filter(e=>e.inRate); if(!t.length)return <div style={{fontSize:11,color:"#94a3b8",marginBottom:10}}>💡 Tick ✓ entries on any tab (Labour, Material, Mould, Freight…) to add them up into this item's rate per {modalItem.unit}.</div>;
+              {(()=>{ const hid=(modalItem.costData||[]).filter(e=>e.inRate&&!tabExists(e.component));
+                const warn=hid.length>0&&<div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"8px 12px",marginBottom:8,fontSize:12,color:"#991b1b",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>⚠️ {hid.length} ticked entr{hid.length>1?"ies are":"y is"} on a removed tab (S$ {fmt(hid.reduce((t,e)=>t+cdRate(e),0))}) and still in this item's rate. <button onClick={clearHiddenTicks} style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:6,padding:"4px 10px",fontSize:12,fontWeight:700,cursor:"pointer"}}>Remove from rate</button></div>;
+                const t=(modalItem.costData||[]).filter(e=>e.inRate&&tabExists(e.component)); if(!t.length)return warn|| <div style={{fontSize:11,color:"#94a3b8",marginBottom:10}}>💡 Tick ✓ entries on any tab (Labour, Material, Mould, Freight…) to add them up into this item's rate per {modalItem.unit}.</div>;
                 const by={}; t.forEach(e=>{ by[e.component]=(by[e.component]||0)+cdRate(e); });
-                return <div style={{background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:12,color:"#065f46",display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
+                return <>{warn}<div style={{background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:12,color:"#065f46",display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
                   <b>Rate from ticked ({t.length}):</b>
                   {Object.entries(by).map(([c,v],i)=><span key={c}>{i>0?"+ ":""}{compLabel(c)} <b>{fmt(v)}</b></span>)}
                   {+modalItem.waste?<span>+ Waste/ OH {+modalItem.waste}%</span>:null}
                   {(modalItem.extras||[]).some(x=>!x.fromCD)?<span>+ other extra items</span>:null}
                   <span style={{marginLeft:"auto",fontWeight:800,color:"#1d4ed8",fontSize:13}}>= S$ {fmt(bTot(modalItem))} / {modalItem.unit}</span>
-                </div>; })()}
+                </div></>; })()}
               {costEntries.length>0&&<div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8,fontSize:11,color:"#64748b",flexWrap:"wrap"}}>
                 <span style={{fontWeight:700}}>Sort:</span>
                 {[["supplier","Supplier"],["location","Location"],["rate","Rate"],["date","Date"]].map(([k,l])=><button key={k} onClick={()=>ceToggleSort(k)} style={{border:"1px solid #e2e8f0",background:ceSort.by===k?"#7c3aed":"#fff",color:ceSort.by===k?"#fff":"#475569",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>{l}{ceSort.by===k?(ceSort.dir===1?" ▲":" ▼"):""}</button>)}
