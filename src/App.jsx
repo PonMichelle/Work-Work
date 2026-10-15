@@ -79,6 +79,10 @@ const calcExpr=str=>{ const s=String(str??"").replace(/^\s*=/,"").replace(/\s+/g
   const prod=()=>{ let v=fac(); while(s[i]==="*"||s[i]==="/"){ const op=s[i++], r=fac(); v=op==="*"?v*r:v/r; } return v; };
   const sum=()=>{ let v=prod(); while(s[i]==="+"||s[i]==="-"){ const op=s[i++], r=prod(); v=op==="+"?v+r:v-r; } return v; };
   const v=sum(); return i===s.length&&isFinite(v)?v:NaN; };
+// A cost-data entry priced in a different unit is converted to the item's unit: rate ÷ cover, where cover = how many item-units
+// (e.g. m²) one entry-unit covers. Example: plant S$ 3,500 per no., 1 no. covers 50 m² → S$ 70 / m². cover may be a formula (e.g. 1.2*2.4*50).
+const cdCover=e=>{ const c=calcExpr(e&&e.cover); return isFinite(c)&&c>0?c:1; };
+const cdRate=e=>(+e.rate||0)/cdCover(e);
 const imgSize=dataUrl=>new Promise(res=>{ const im=new Image(); im.onload=()=>res({w:im.naturalWidth||im.width||210,h:im.naturalHeight||im.height||160}); im.onerror=()=>res({w:210,h:160}); im.src=dataUrl; });
 const shrinkDataURL=(dataUrl,max=460,q=0.45)=>new Promise(res=>{ if(!dataUrl){res("");return;} const im=new Image(); im.onload=()=>{ let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",q));}catch{res(dataUrl);} }; im.onerror=()=>res(dataUrl); im.src=dataUrl; });
 const imgToDataURL=blob=>new Promise(res=>{ if(!blob){res("");return;} const fr=new FileReader(); fr.onload=()=>{ const im=new Image(); im.onload=()=>{ const max=1100; let w=im.width,h=im.height; if(w>max){h=h*max/w;w=max;} if(h>max){w=w*max/h;h=max;} const cv=document.createElement("canvas"); cv.width=w; cv.height=h; cv.getContext("2d").drawImage(im,0,0,w,h); try{res(cv.toDataURL("image/jpeg",0.7));}catch{res("");} }; im.onerror=()=>res(""); im.src=fr.result; }; fr.onerror=()=>res(""); fr.readAsDataURL(blob); });
@@ -656,13 +660,24 @@ export default function App(){
   const costEntries=(()=>{ let arr=modalItem?(modalItem.costData||[]).filter(e=>e.component===cType):[]; if(ceSort.by!=="none"){ arr=[...arr].sort((a,b)=>{ if(ceSort.by==="rate")return ((+a.rate||0)-(+b.rate||0))*ceSort.dir; return String(a[ceSort.by]||"").localeCompare(String(b[ceSort.by]||""),undefined,{numeric:true})*ceSort.dir; }); } return arr; })();
   const ceToggleSort=by=>setCeSort(s=>s.by===by?{by,dir:-s.dir}:{by,dir:1});
   const compLabel=c=>CLABEL[c]||(ccomps.find(x=>x.key===c)||{}).label||c;
+  // Ticked cost-data entries (e.inRate) make up the item's rate: Labour/Material/Plant/Subcon tabs fill those columns (sum of ticked),
+  // every other tab (Mould, Freight, Accessories…) becomes an extra item named after the tab. Manually typed extra items are kept.
+  // Before the first tick the old Labour/Material/Plant/Subcon are saved in item.preTick and put back when the last tick is removed.
+  const tickPatch=(b,cd)=>{ const manual=(b.extras||[]).filter(x=>!x.fromCD), was=(b.costData||[]).some(e=>e.inRate), now=cd.some(e=>e.inRate);
+    if(!now){ if(!was)return {}; const pt=b.preTick||{}; return {labour:+pt.labour||0,material:+pt.material||0,plant:+pt.plant||0,subcon:+pt.subcon||0,preTick:null,extras:manual}; }
+    const sum=c=>Math.round(cd.filter(e=>e.inRate&&e.component===c).reduce((t,e)=>t+cdRate(e),0)*10000)/10000;
+    const customs=[...new Set(cd.filter(e=>e.inRate&&!COMPS.includes(e.component)).map(e=>e.component))];
+    return {...(was?{}:{preTick:{labour:+b.labour||0,material:+b.material||0,plant:+b.plant||0,subcon:+b.subcon||0}}),
+      labour:sum("labour"),material:sum("material"),plant:sum("plant"),subcon:sum("subcon"),
+      extras:[...manual,...customs.map(c=>({id:"cd_"+c,name:compLabel(c),type:"$",value:sum(c),fromCD:true}))]}; };
+  const toggleInRate=eid=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).map(e=>e.id===eid?{...e,inRate:!e.inRate}:e); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); };
   const allComps=[...COMPS,...ccomps.map(c=>c.key)];
 
   const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!String(cForm.rate).trim()){toast_("⚠️ Enter supplier and rate");return;} const rv=calcExpr(cForm.rate); if(!isFinite(rv)){toast_("⚠️ Rate formula has a mistake — check brackets / symbols");return;} const rExpr=/[-+*/()]/.test(String(cForm.rate).replace(/^\s*[=-]/,""))?String(cForm.rate).trim():""; const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:Math.round(rv*10000)/10000,...(rExpr?{expr:rExpr}:{}),date:cForm.date,location:cForm.location||"",note:cForm.note,imgs:cForm.imgs||[]}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",location:"",note:"",imgs:[]}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
   const pickCostImg=useCallback(async files=>{ const list=files&&files.length!=null?[...files]:(files?[files]:[]); if(!list.length)return; const out=[]; for(const file of list){ const d=await imgToDataURL(file); if(d&&d.length<=1400000)out.push(d); else if(d)toast_("⚠️ One image too large, skipped"); } if(out.length)setCForm(f=>({...f,imgs:[...(f.imgs||[]),...out]})); },[toast_]);
-  const delCostEntry=useCallback(eid=>{ const b=burItems.find(x=>x.id===costModal); if(!b)return; setBurField(costModal,{costData:(b.costData||[]).filter(e=>e.id!==eid)}); },[costModal,burItems]);
+  const delCostEntry=useCallback(eid=>{ const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).filter(e=>e.id!==eid); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); },[costModal,burItems,ccomps]);
   // Edit an existing cost-data entry (optimistic local + debounced save)
-  const updCostEntry=useCallback((eid,ch)=>{ recordFields([costModal],["costData"],"Edit cost data of "+burLabel(costModal),true); setBurItems(prev=>prev.map(b=>b.id===costModal?{...b,costData:(b.costData||[]).map(e=>e.id===eid?{...e,...ch}:e)}:b)); const k="cd_"+costModal; if(burTimers.current[k])clearTimeout(burTimers.current[k]); burTimers.current[k]=setTimeout(()=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(b)updateDoc(doc(db,"bur",costModal),{costData:b.costData}).catch(()=>{}); },600); },[costModal]);
+  const updCostEntry=useCallback((eid,ch)=>{ recordFields([costModal],["costData","labour","material","plant","subcon","extras","preTick"],"Edit cost data of "+burLabel(costModal),true); setBurItems(prev=>prev.map(b=>{ if(b.id!==costModal)return b; const cd=(b.costData||[]).map(e=>e.id===eid?{...e,...ch}:e); return {...b,costData:cd,...(cd.some(e=>e.inRate)?tickPatch(b,cd):{})}; })); const k="cd_"+costModal; if(burTimers.current[k])clearTimeout(burTimers.current[k]); burTimers.current[k]=setTimeout(()=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(b)updateDoc(doc(db,"bur",costModal),b.costData.some(e=>e.inRate)?{costData:b.costData,labour:+b.labour||0,material:+b.material||0,plant:+b.plant||0,subcon:+b.subcon||0,extras:b.extras||[],preTick:b.preTick??null}:{costData:b.costData}).catch(()=>{}); },600); },[costModal,ccomps]);
   const entryPhotos=e=>e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[]);
   const addEntryPhotos=useCallback(async(eid,files)=>{ const list=files&&files.length!=null?[...files]:(files?[files]:[]); if(!list.length)return; const out=[]; for(const f of list){ const d=await imgToDataURL(f); if(d&&d.length<=1400000)out.push(d); else if(d)toast_("⚠️ One image too large, skipped"); } if(!out.length)return; const b=burItemsRef.current.find(x=>x.id===costModal); const e=b&&(b.costData||[]).find(x=>x.id===eid); const cur=e?entryPhotos(e):[]; updCostEntry(eid,{imgs:[...cur,...out],img:""}); },[costModal,updCostEntry,toast_]);
   const removeEntryPhoto=useCallback((eid,idx)=>{ const b=burItemsRef.current.find(x=>x.id===costModal); const e=b&&(b.costData||[]).find(x=>x.id===eid); if(!e)return; updCostEntry(eid,{imgs:entryPhotos(e).filter((_,j)=>j!==idx),img:""}); },[costModal,updCostEntry]);
@@ -1576,6 +1591,15 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
               <button onClick={addComponentTab} title="Add a tab" style={{padding:"9px 12px",fontSize:12,fontWeight:700,border:"none",color:"#7c3aed",background:"none",cursor:"pointer",whiteSpace:"nowrap"}}>＋ Tab</button>
             </div>
             <div style={{flex:1,overflow:"auto",padding:"16px 20px"}}>
+              {(()=>{ const t=(modalItem.costData||[]).filter(e=>e.inRate); if(!t.length)return <div style={{fontSize:11,color:"#94a3b8",marginBottom:10}}>💡 Tick ✓ entries on any tab (Labour, Material, Mould, Freight…) to add them up into this item's rate per {modalItem.unit}.</div>;
+                const by={}; t.forEach(e=>{ by[e.component]=(by[e.component]||0)+cdRate(e); });
+                return <div style={{background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:12,color:"#065f46",display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
+                  <b>Rate from ticked ({t.length}):</b>
+                  {Object.entries(by).map(([c,v],i)=><span key={c}>{i>0?"+ ":""}{compLabel(c)} <b>{fmt(v)}</b></span>)}
+                  {+modalItem.waste?<span>+ Waste/ OH {+modalItem.waste}%</span>:null}
+                  {(modalItem.extras||[]).some(x=>!x.fromCD)?<span>+ other extra items</span>:null}
+                  <span style={{marginLeft:"auto",fontWeight:800,color:"#1d4ed8",fontSize:13}}>= S$ {fmt(bTot(modalItem))} / {modalItem.unit}</span>
+                </div>; })()}
               {costEntries.length>0&&<div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8,fontSize:11,color:"#64748b",flexWrap:"wrap"}}>
                 <span style={{fontWeight:700}}>Sort:</span>
                 {[["supplier","Supplier"],["location","Location"],["rate","Rate"],["date","Date"]].map(([k,l])=><button key={k} onClick={()=>ceToggleSort(k)} style={{border:"1px solid #e2e8f0",background:ceSort.by===k?"#7c3aed":"#fff",color:ceSort.by===k?"#fff":"#475569",borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>{l}{ceSort.by===k?(ceSort.dir===1?" ▲":" ▼"):""}</button>)}
@@ -1600,13 +1624,19 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
               ):(
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,marginBottom:16}}>
                   <thead><tr style={{background:"#f8fafc",color:"#94a3b8",fontSize:11}}>
-                    {["Supplier / Vendor","Rate (S$)","Date","Location","Note","Photo",""].map((h,i)=><th key={i} style={{padding:"8px 10px",textAlign:i===1?"right":"left",fontWeight:600,borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}
+                    <th title="Tick to include in the item's rate" style={{padding:"8px 6px",borderBottom:"1px solid #e2e8f0",width:30,textAlign:"center"}}>✓</th>{["Supplier / Vendor","Rate (S$)",`Per → ${modalItem.unit||"unit"}`,"Date","Location","Note","Photo",""].map((h,i)=><th key={i} style={{padding:"8px 10px",textAlign:i===1?"right":"left",fontWeight:600,borderBottom:"1px solid #e2e8f0"}}>{h}</th>)}
                   </tr></thead>
                   <tbody>
                     {costEntries.map(e=>(
-                      <tr key={e.id} style={{borderBottom:"1px solid #f8fafc"}}>
+                      <tr key={e.id} style={{borderBottom:"1px solid #f8fafc",background:e.inRate?"#ecfdf5":undefined}}>
+                        <td style={{padding:"6px 6px",textAlign:"center"}}><input type="checkbox" checked={!!e.inRate} onChange={()=>toggleInRate(e.id)} title="Include this in the item's rate" style={{accentColor:"#059669",cursor:"pointer",width:15,height:15}}/></td>
                         <td style={{padding:"6px 8px"}}><input value={e.supplier||""} onChange={ev=>updCostEntry(e.id,{supplier:ev.target.value})} style={{width:"100%",border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:12,fontWeight:600,color:"#1e293b",outline:"none",background:"#f8fafc"}}/></td>
                         <td style={{padding:"6px 8px",textAlign:"right"}}><input title={e.expr?`= S$ ${fmt(e.rate)}`:"Type a number or a formula, e.g. =(100+20)/2"} value={e.expr??(e.rate??"")} onChange={ev=>{ const t=ev.target.value, n=calcExpr(t); updCostEntry(e.id,{expr:/[-+*/()]/.test(String(t).replace(/^\s*[=-]/,""))?t:null,...(isFinite(n)?{rate:Math.round(n*10000)/10000}:t.trim()===""?{rate:0}:{})}); }} style={{width:e.expr?150:90,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:13,fontWeight:700,color:"#1d4ed8",outline:"none",textAlign:"right",background:"#f8fafc"}}/></td>
+                        <td style={{padding:"6px 8px",whiteSpace:"nowrap",fontSize:11,color:"#64748b"}} title={`Rate is per what? And how many ${modalItem.unit} does ONE of it cover? e.g. per no., 1 no. = 50 ${modalItem.unit}`}>
+                          per <input value={e.per||""} placeholder={modalItem.unit} onChange={ev=>updCostEntry(e.id,{per:ev.target.value})} style={{width:44,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 5px",fontSize:11,outline:"none"}}/>
+                          {e.per&&String(e.per).trim().toLowerCase()!==String(modalItem.unit||"").trim().toLowerCase()&&<> · 1 = <input value={e.cover??""} placeholder="?" onChange={ev=>updCostEntry(e.id,{cover:ev.target.value})} style={{width:60,border:"1px solid "+(String(e.cover??"").trim()!==""&&!isFinite(calcExpr(e.cover))?"#ef4444":"#e2e8f0"),borderRadius:5,padding:"3px 5px",fontSize:11,outline:"none",textAlign:"right"}}/> {modalItem.unit}
+                            {cdCover(e)!==1&&<b style={{color:"#1d4ed8",marginLeft:4}}>= S$ {fmt(cdRate(e))}/{modalItem.unit}</b>}</>}
+                        </td>
                         <td style={{padding:"6px 8px"}}><input value={e.date||""} placeholder="—" onChange={ev=>updCostEntry(e.id,{date:ev.target.value})} style={{width:80,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:12,color:"#64748b",outline:"none",background:"#f8fafc"}}/></td>
                         <td style={{padding:"6px 8px"}}><input value={e.location||""} placeholder="—" onChange={ev=>updCostEntry(e.id,{location:ev.target.value})} style={{width:100,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:12,color:"#64748b",outline:"none",background:"#f8fafc"}}/></td>
                         <td style={{padding:"6px 8px"}}><input value={e.note||""} placeholder="—" onChange={ev=>updCostEntry(e.id,{note:ev.target.value})} style={{width:"100%",minWidth:90,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:11,color:"#64748b",outline:"none",background:"#f8fafc"}}/></td>
