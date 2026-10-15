@@ -139,8 +139,11 @@ const EXTRA_PRESETS=[["Mortar","$"],["Mesh","$"],["Accessories","$"]];
 const baseDirect=b=>(+b.labour||0)+(+b.material||0)+(+b.plant||0)+(+b.subcon||0);
 const extraAmt=(b,x)=>x.type==="%"?baseDirect(b)*(+x.value||0)/100:(+x.value||0);
 const extrasTot=b=>(b.extras||[]).reduce((t,x)=>t+extraAmt(b,x),0);
-const wasteAmt=b=>baseDirect(b)*(+b.waste||0)/100;
-const bTot=b=>{const t=baseDirect(b)+wasteAmt(b)+extrasTot(b);if(!hasRoundUp(b))return t;const f=10**(+b.roundUp);return Math.ceil(t*f-1e-9)/f;};
+// item.discount = % taken off the direct cost first; Waste/ OH % is then worked out on the discounted amount.
+const discAmt=b=>baseDirect(b)*(+b.discount||0)/100;
+const netDirect=b=>baseDirect(b)-discAmt(b);
+const wasteAmt=b=>netDirect(b)*(+b.waste||0)/100;
+const bTot=b=>{const t=netDirect(b)+wasteAmt(b)+extrasTot(b);if(!hasRoundUp(b))return t;const f=10**(+b.roundUp);return Math.ceil(t*f-1e-9)/f;};
 // Custom BOQ columns: compute each column's value per row. Formula columns can reference
 // qty, rateA, rateB, amtA, amtB, and earlier custom columns (by sanitised name).
 // Compute custom BOQ columns. Formulas may use natural names: Qty, Rate A, Rate B,
@@ -509,18 +512,18 @@ export default function App(){
         g.xcols=xn.length>4?[...xn.slice(0,3),"Others"]:xn; g.xcol=n=>{ const i=g.xcols.findIndex(y=>y.toLowerCase()===n.toLowerCase()); return 14+(i>=0?i:3); }; });
       const photoCol=SUP0+Math.max(maxSup,4)+1;
       // column widths copied from the master sheet
-      const W={1:15,2:52,3:6,4:45,5:17.6,6:16.9,7:1.6,8:15.7,9:8.4,10:15.9,11:12,12:12,13:12,14:13,15:13,16:13,17:13};
+      const W={1:15,2:52,3:6,4:45,5:17.6,6:16.9,7:11,8:15.7,9:8.4,10:15.9,11:12,12:12,13:12,14:13,15:13,16:13,17:13};
       for(let c=1;c<photoCol+12;c++) ws.getColumn(c).width=c>=photoCol?31:(W[c]||18.2);
       put(1,1,"Exported "+new Date().toLocaleDateString("en-SG",{day:"numeric",month:"short",year:"numeric"}),{font:{bold:true}});
       put(3,1,"BUILD UP RATES",{font:{underline:true}});
-      const HEAD=[[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[8,"Quote","center"],[9,"%","center"],[10,"Waste/ OH","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"Extra items (S$)","left"],[SUP0,"Subcon / Supplier","center"]];
+      const HEAD=[[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[7,"Discount","center"],[8,"Quote","center"],[9,"%","center"],[10,"Waste/ OH","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"Extra items (S$)","left"],[SUP0,"Subcon / Supplier","center"]];
       HEAD.forEach(([c,t,h])=>put(5,c,t,{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:h,wrapText:true}}));
       put(5,photoCol,"Photos",{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:"center"}});
       let r=7, count=0, photoCount=0; const catRows=new Set();
       for(const g of groups){
         // category heading row: name in A (orange), component labels, then supplier names over their rate columns
         put(r,1,g.name,{font:{bold:true,underline:true},fill:C_CAT,bd:1}); catRows.add(r);
-        [[8,"Quote"],[9,"%"],[10,"Waste/ OH"],[11,"Labour"],[12,"Material"],[13,"Plant"],...g.xcols.map((n,i)=>[14+i,n])].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center",wrapText:true}}));
+        [[7,"Discount"],[8,"Quote"],[9,"%"],[10,"Waste/ OH"],[11,"Labour"],[12,"Material"],[13,"Plant"],...g.xcols.map((n,i)=>[14+i,n])].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center",wrapText:true}}));
         g.sups.forEach((s,i)=>{ const d=[...s.dates]; put(r,SUP0+i,s.name+(d.length===1?`\n(${d[0]})`:""),{fill:C_SUPHDR,bd:1,al:{horizontal:"center",wrapText:true}}); });
         ws.getRow(r).height=g.sups.some(s=>s.dates.size===1)?25.5:12.75; r++;
         let curSub="";
@@ -546,7 +549,8 @@ export default function App(){
           put(r,6,{formula:`SUM(G${r}:Q${r})-I${r}`,result:bTot({...it,roundUp:null})},{nf:NF});
           costCell(8,"subcon",sub); costCell(11,"labour",lab); costCell(12,"material",mat); costCell(13,"plant",pl);
           // waste: I = % (as a fraction, like the master sheet), J = (Quote+Labour+Material+Plant) x I
-          if(wp){ put(r,9,wp/100,{nf:"0.##%",al:{horizontal:"center"}}); put(r,10,{formula:`(H${r}+K${r}+L${r}+M${r})*I${r}`,result:wasteAmt(it)},{nf:NF,al:{horizontal:"center"}}); }
+          const dp=+it.discount||0; if(dp) put(r,7,{formula:`-(H${r}+K${r}+L${r}+M${r})*${dp/100}`,result:-discAmt(it)},{nf:NF,al:{horizontal:"center"},font:{color:{argb:"FFDC2626"}}});
+          if(wp){ put(r,9,wp/100,{nf:"0.##%",al:{horizontal:"center"}}); put(r,10,{formula:`(H${r}+K${r}+L${r}+M${r}+G${r})*I${r}`,result:wasteAmt(it)},{nf:NF,al:{horizontal:"center"}}); }
           // extra items: lump-sum S$ under their named column (N..Q)
           const xsum={}, xnote={}; (it.extras||[]).forEach(x=>{ const c=g.xcol(String(x.name||"").trim()||"Other"); xsum[c]=(xsum[c]||0)+extraAmt(it,x); (xnote[c]=xnote[c]||[]).push(`${x.name||"Other"}: S$ ${extraAmt(it,x).toFixed(2)}`); });
           Object.entries(xsum).forEach(([c,v])=>{ const own=(it.extras||[]).filter(x=>g.xcol(String(x.name||"").trim()||"Other")===+c), ex=own.length===1&&own[0].type!=="%"&&/[-+*/()]/.test(String(own[0].expr||"").replace(/^\s*[=-]/,""))?String(own[0].expr).replace(/^\s*=/,"").replace(/\s+/g,""):null;
@@ -565,7 +569,7 @@ export default function App(){
       // Colour whole rows/columns like the master sheet: header row yellow, category rows orange, and every column keeps its
       // colour all the way down (grey text area, purple Rate, cyan Quote, pink %, pale blue build-up, pink supplier quotes).
       const lastCol=SUP0+Math.max(maxSup,4)-1;
-      const colFill=c=>c===5?C_RATE:c===8?C_QUOTE:c===9?"FFE6B8B7":(c>=10&&c<=17)?"FFDDEBF7":(c>=SUP0&&c<=lastCol)?C_OTHER:c===7?null:"FFF2F2F2";
+      const colFill=c=>c===5?C_RATE:c===8?C_QUOTE:c===9?"FFE6B8B7":(c>=10&&c<=17)?"FFDDEBF7":(c>=SUP0&&c<=lastCol)?C_OTHER:c===7?"FFFDE2E2":"FFF2F2F2";
       for(let rr=5;rr<r;rr++) for(let c=1;c<=lastCol;c++){ const cell=ws.getCell(rr,c); if(cell.fill&&cell.fill.type==="pattern")continue;
         const f=rr===5?C_HEAD:catRows.has(rr)?C_CAT:colFill(c); if(f)cell.fill=fill(f); if(rr===5||catRows.has(rr))cell.border={top:thin,bottom:thin}; }
       ws.properties.outlineLevelRow=2; ws.properties.outlineProperties={summaryBelow:false,summaryRight:false};
@@ -897,6 +901,11 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
     if(!confirm(`Add "_unit" to ${list.length} BUR code(s)?\n\ne.g. ${list[0].code}  →  ${codeWithUnit(list[0].code,list[0].unit)}\n\nBOQ rows and Master BQ templates using the old codes will still match.`))return;
     try{ _u(); for(let i=0;i<list.length;i+=400){ const batch=writeBatch(db); list.slice(i,i+400).forEach(b=>batch.update(doc(db,"bur",b.id),{code:codeWithUnit(b.code,b.unit)})); await batch.commit(); } toast_(`✅ Updated ${list.length} code(s)`); }catch(e){ toast_("⚠️ "+e.message); } };
   // Set Waste/ OH % on all selected items at once (e.g. 10%).
+  const bulkSetDiscount=async v=>{ const ids=[...selBur]; if(!ids.length)return; let d=v;
+    if(v==="__custom"){ const t=prompt("Discount % for the selected item(s):","5"); if(t==null)return; d=t; }
+    const val=+String(d).replace(/%/g,"").trim(); if(!isFinite(val)){toast_("⚠️ Enter a number");return;}
+    recordFields(ids,["discount"],`Discount ${val}% on ${ids.length} item(s)`);
+    try{ for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{discount:val})); await batch.commit();} toast_(val?`✅ Discount ${val}% on ${ids.length} item(s)`:`✅ Discount removed from ${ids.length} item(s)`); clearSel(); }catch(e){ toast_("⚠️ "+e.message); } };
   const bulkSetWaste=async v=>{ const ids=[...selBur]; if(!ids.length)return; let w=v;
     if(v==="__custom"){ const t=prompt("Waste/ OH % for the selected item(s):","10"); if(t==null)return; w=t; }
     const val=+String(w).replace(/%/g,"").trim(); if(!isFinite(val)){toast_("⚠️ Enter a number");return;}
@@ -952,11 +961,12 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 </div>
                 <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
                   <div><label style={lbl}>SUBCON (S$)</label><input type="number" style={{...inp,width:90}} value={item.subcon?item.subcon:""} onChange={e=>updBur(item.id,{subcon:+e.target.value||0})}/></div>
+                  <div><label style={lbl}>DISCOUNT %</label><input type="number" style={{...inp,width:70}} placeholder="0" value={item.discount?item.discount:""} onChange={e=>updBur(item.id,{discount:+e.target.value||0})}/></div>
                   <div><label style={lbl}>WASTE/ OH %</label><input type="number" style={{...inp,width:70}} placeholder="0" value={item.waste?item.waste:""} onChange={e=>updBur(item.id,{waste:+e.target.value||0})}/></div>
                   <div><label style={lbl}>ROUND UP RATE</label><select style={{...inp,width:110}} value={hasRoundUp(item)?String(item.roundUp):""} onChange={e=>updBur(item.id,{roundUp:e.target.value===""?null:+e.target.value})}>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
                   <div><label style={lbl}>CATEGORY</label><select style={{...inp,background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
                   <div><label style={lbl}>SUB-CATEGORY</label><input list={"subcats_"+item.id} style={{...inp,width:200}} placeholder="(none)" value={item.group||""} onChange={e=>updBur(item.id,{group:e.target.value})}/><datalist id={"subcats_"+item.id}>{subcatsOf(item.catId).map(g=><option key={g} value={g}/>)}</datalist></div>
-                  <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b>{+item.waste?<> · Waste/ OH ({+item.waste}%) <b>S$ {fmt(wasteAmt(item))}</b></>:null}{xs.length?<> · Extras <b>S$ {fmt(extrasTot(item))}</b></>:null} · <span style={{color:"#1d4ed8",fontWeight:800}}>Rate S$ {fmt(total)}/{item.unit}</span></div>
+                  <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b>{+item.discount?<> · Discount ({+item.discount}%) <b style={{color:"#dc2626"}}>−S$ {fmt(discAmt(item))}</b></>:null}{+item.waste?<> · Waste/ OH ({+item.waste}%) <b>S$ {fmt(wasteAmt(item))}</b></>:null}{xs.length?<> · Extras <b>S$ {fmt(extrasTot(item))}</b></>:null} · <span style={{color:"#1d4ed8",fontWeight:800}}>Rate S$ {fmt(total)}/{item.unit}</span></div>
                 </div>
                 <div style={{marginTop:12,paddingTop:10,borderTop:"1px dashed #e2e8f0"}}>
                   <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:xs.length?8:0}}>
@@ -1203,6 +1213,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <select value="" onChange={e=>{if(e.target.value)bulkMoveCat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Category…</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
                 <span style={{fontSize:11,color:"#475569"}}>Set unit:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkSetUnit(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Unit…</option>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetDiscount(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Discount…</option>{[2,5,10,15].map(m=><option key={m} value={m}>{m}%</option>)}<option value="__custom">Other %…</option><option value="0">None (0%)</option></select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetWaste(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Waste/ OH…</option>{[5,10,15,20].map(m=><option key={m} value={m}>{m}%</option>)}<option value="__custom">Other %…</option><option value="0">None (0%)</option></select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetRound(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Round up…</option>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
                 <button onClick={()=>copyItems([...selBur])} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>⧉ Copy {selBur.size}</button>
