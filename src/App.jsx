@@ -924,8 +924,14 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
     try{ for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.delete(doc(db,"bur",id))); await batch.commit();}
       pushUndo({kind:"deleted",label:`Delete ${docs.length} item(s)`,docs}); toast_(`🗑 Deleted ${ids.length} item(s)`); clearSel(); }catch(e){ toast_("⚠️ "+e.message); } };
   const clearSel=()=>setSelBur(new Set());
-  const moveItemsToCat=async(ids,cid)=>{ if(!ids.length||!cid)return; recordFields(ids,["catId"],`Move ${ids.length} item(s) to ${catName(cid)}`); for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{catId:cid})); await batch.commit();} };
-  const bulkMoveCat=async cid=>{ const ids=[...selBur]; if(!ids.length||!cid)return; await moveItemsToCat(ids,cid); toast_(`✅ Moved ${ids.length} item(s)`); clearSel(); };
+  // Move items to another category: shown moved at once, saved in batches; returns how many really moved (0 + message on failure).
+  const moveItemsToCat=async(ids,cid)=>{ ids=ids.filter(id=>{ const b=burItemsRef.current.find(x=>x.id===id); return b&&b.catId!==cid; }); if(!ids.length||!cid)return 0;
+    recordFields(ids,["catId"],`Move ${ids.length} item(s) to ${catName(cid)}`);
+    ids.forEach(id=>{ if(burTimers.current[id]){ clearTimeout(burTimers.current[id]); delete burTimers.current[id]; } }); // a half-saved edit must not put the old category back
+    setBurItems(prev=>prev.map(b=>ids.includes(b.id)?{...b,catId:cid}:b));
+    try{ for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{catId:cid})); await batch.commit();} return ids.length; }
+    catch(e){ toast_("⚠️ Move failed — "+(e&&e.message||e)+". Please try again."); return 0; } };
+  const bulkMoveCat=async cid=>{ const ids=[...selBur]; if(!ids.length||!cid)return; const n=await moveItemsToCat(ids,cid); if(n){ toast_(`✅ Moved ${n} item(s) to ${catName(cid)}`); clearSel(); } else if(n===0&&ids.every(id=>(burItemsRef.current.find(x=>x.id===id)||{}).catId===cid)) toast_(`They are already in ${catName(cid)}`); };
   // Replace this project's whole BUR library with the items in a master BUR workbook (layout of BUR.xlsx).
   // Downloads a JSON backup of the current items first, and only deletes after the user confirms the counts.
   const replaceBurFromExcel=async file=>{
@@ -992,7 +998,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
     try{ for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{waste:val})); await batch.commit();} toast_(val?`✅ Waste/ OH ${val}% on ${ids.length} item(s)`:`✅ Waste/ OH removed from ${ids.length} item(s)`); clearSel(); }catch(e){ toast_("⚠️ "+e.message); } };
   const bulkSetRound=async v=>{ const ids=[...selBur]; if(!ids.length)return; const val=v===""?null:+v; recordFields(ids,["roundUp"],`Round-up on ${ids.length} item(s)`); for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{roundUp:val})); await batch.commit();} toast_(`✅ ${val===null?"Exact rate":`Round up to ${roundLabel(val)}`} on ${ids.length} item(s)`); clearSel(); };
   const bulkSetUnit=async u=>{ const ids=[...selBur]; if(!ids.length||!u)return; recordFields(ids,["unit","code"],`Set unit on ${ids.length} item(s)`); for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>{ const b=burItemsRef.current.find(x=>x.id===id); batch.update(doc(db,"bur",id),b&&b.code?{unit:u,code:swapUnitTag(b.code,b.unit,u)}:{unit:u}); }); await batch.commit();} toast_(`✅ Set unit on ${ids.length} item(s)`); clearSel(); };
-  const handleDropCat=(cid,e)=>{ e.preventDefault(); const id=e.dataTransfer.getData("text/bur"); if(!id)return; const ids=(selBur.has(id)&&selBur.size>1)?[...selBur]:[id]; moveItemsToCat(ids,cid).then(()=>{toast_(`✅ Moved ${ids.length} item(s)`);clearSel();}); };
+  const handleDropCat=(cid,e)=>{ e.preventDefault(); const id=e.dataTransfer.getData("text/bur"); if(!id)return; const ids=(selBur.has(id)&&selBur.size>1)?[...selBur]:[id]; moveItemsToCat(ids,cid).then(n=>{ if(n){toast_(`✅ Moved ${n} item(s) to ${catName(cid)}`);clearSel();}}); };
   const _codeCount={}; burItems.forEach(b=>{const k=(b.code||"").trim().toLowerCase(); if(k)_codeCount[k]=(_codeCount[k]||0)+1;});
   const isDupCode=code=>{const k=(code||"").trim().toLowerCase(); return !!k&&_codeCount[k]>1;};
   const dupCount=Object.values(_codeCount).filter(n=>n>1).length;
@@ -1291,7 +1297,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <span style={{fontSize:11,color:"#475569"}}>Sub-category:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkSetSubcat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff",maxWidth:180}}><option value="">Sub-category…</option><option value="__new">＋ New…</option><option value="__none">(none)</option>{subcatsOf(selCat).map(g=><option key={g} value={g}>{g}</option>)}</select>
                 <span style={{fontSize:11,color:"#475569"}}>Move to:</span>
-                <select value="" onChange={e=>{if(e.target.value)bulkMoveCat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Category…</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
+                <select value="" onChange={e=>{if(e.target.value)bulkMoveCat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Category…</option>{[...cats].filter(c=>c.id!==selCat).sort((a,b)=>String(a.name).localeCompare(String(b.name))).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
                 <span style={{fontSize:11,color:"#475569"}}>Set unit:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkSetUnit(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Unit…</option>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
                 <button onClick={bulkAddExtra} title="Add or update a lump-sum extra item (e.g. conc pump S$ 10) on all selected items" style={{background:"#0ea5e9",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>＋ Extra item…</button>
