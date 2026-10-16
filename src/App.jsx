@@ -201,6 +201,7 @@ export default function App(){
   const [burItems,setBurItems]=useState([]);
   const [selCat,setSelCat]=useState(DEF_CATS[0].id);
   const [expBur,setExpBur]=useState(null);
+  const [editExpr,setEditExpr]=useState(null); // id of the rate / amount box being typed in
   const [syncState,setSyncState]=useState(null); // "Sync from project" window: {src, loading, rows:[{key,kind,cur,src,diffs}], sel:Set, opts}
   const [collapsedSubs,setCollapsedSubs]=useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("burCollapsedSubs")||"[]")); }catch{ return new Set(); } }); // "catId|sub-category" keys folded in the BUR table
   const [burSearch,setBurSearch]=useState(""); const [burSearchCat,setBurSearchCat]=useState(false);
@@ -517,7 +518,7 @@ export default function App(){
         g.sups=sups; g.supIdx=idx; maxSup=Math.max(maxSup,sups.length);
         const xn=[]; g.items.forEach(it=>(it.extras||[]).forEach(x=>{ const n=String(x.name||"").trim()||"Other"; if(!xn.some(y=>y.toLowerCase()===n.toLowerCase()))xn.push(n); }));
         g.xcols=xn.length>4?[...xn.slice(0,3),"Others"]:xn; g.xcol=n=>{ const i=g.xcols.findIndex(y=>y.toLowerCase()===n.toLowerCase()); return 14+(i>=0?i:3); }; });
-      const photoCol=SUP0+Math.max(maxSup,4)+1;
+      const notesCol=SUP0+Math.max(maxSup,4), photoCol=notesCol+1; // visible Notes column right after the supplier columns
       // column widths copied from the master sheet
       const W={1:15,2:52,3:6,4:45,5:17.6,6:16.9,7:11,8:15.7,9:8.4,10:15.9,11:12,12:12,13:12,14:13,15:13,16:13,17:13};
       for(let c=1;c<photoCol+12;c++) ws.getColumn(c).width=c>=photoCol?31:(W[c]||18.2);
@@ -525,6 +526,7 @@ export default function App(){
       put(3,1,"BUILD UP RATES",{font:{underline:true}});
       const HEAD=[[1,"Description","left"],[3,"Unit","center"],[4,"Code","center"],[5,"Rate","center"],[6,"Amt","center"],[7,"Discount","center"],[8,"Quote","center"],[9,"%","center"],[10,"Waste/ OH","center"],[11,"Labour","center"],[12,"Material","center"],[13,"Plant","center"],[14,"Extra items (S$)","left"],[SUP0,"Subcon / Supplier","center"]];
       HEAD.forEach(([c,t,h])=>put(5,c,t,{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:h,wrapText:true}}));
+      put(5,notesCol,"Notes",{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:"left"}}); ws.getColumn(notesCol).width=45;
       put(5,photoCol,"Photos",{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:"center"}});
       let r=7, count=0, photoCount=0; const catRows=new Set(); const codeRow={}, pendingF=[];
       for(const g of groups){
@@ -556,8 +558,8 @@ export default function App(){
           put(r,6,{formula:`SUM(G${r}:Q${r})-I${r}`,result:bTot({...it,roundUp:null})},{nf:NF});
           costCell(8,"subcon",sub); costCell(11,"labour",lab); costCell(12,"material",mat); costCell(13,"plant",pl);
           // waste: I = % (as a fraction, like the master sheet), J = (Quote+Labour+Material+Plant) x I
-          const dp=+it.discount||0; if(dp) put(r,7,{formula:`-(H${r}+K${r}+L${r}+M${r})*${dp/100}`,result:-discAmt(it)},{nf:NF,al:{horizontal:"center"},font:{color:{argb:"FFDC2626"}}});
-          if(wp){ put(r,9,wp/100,{nf:"0.##%",al:{horizontal:"center"}}); put(r,10,{formula:`(H${r}+K${r}+L${r}+M${r}+G${r})*I${r}`,result:wasteAmt(it)},{nf:NF,al:{horizontal:"center"}}); }
+          const dp=+it.discount||0; if(dp) put(r,7,{formula:`-(H${r}+K${r}+L${r}+M${r})*${dp/100}`,result:-discAmt(it)},{nf:`"-${+dp}% = "#,##0.00;"-${+dp}% = -"#,##0.00`,al:{horizontal:"center"},font:{color:{argb:"FFDC2626"}}});
+          if(wp){ put(r,9,wp/100,{nf:Number.isInteger(wp)?"0%":"0.0#%",al:{horizontal:"center"}}); put(r,10,{formula:`(H${r}+K${r}+L${r}+M${r}+G${r})*I${r}`,result:wasteAmt(it)},{nf:NF,al:{horizontal:"center"}}); }
           // extra items: lump-sum S$ under their named column (N..Q)
           const xsum={}, xnote={}; (it.extras||[]).forEach(x=>{ const c=g.xcol(String(x.name||"").trim()||"Other"); xsum[c]=(xsum[c]||0)+extraAmt(it,x); (xnote[c]=xnote[c]||[]).push(`${x.name||"Other"}: S$ ${extraAmt(it,x).toFixed(2)}`); });
           Object.entries(xsum).forEach(([c,v])=>{ const own=(it.extras||[]).filter(x=>g.xcol(String(x.name||"").trim()||"Other")===+c), xRef=own.length===1&&exprRefs(own[0].expr).length>0, ex=!xRef&&own.length===1&&own[0].type!=="%"&&/[-+*/()]/.test(String(own[0].expr||"").replace(/^\s*[=-]/,""))?String(own[0].expr).replace(/^\s*=/,"").replace(/\s+/g,""):null;
@@ -565,6 +567,8 @@ export default function App(){
             const xc=put(r,+c,ex&&isFinite(calcExpr(ex))?{formula:ex,result:+v.toFixed(4)}:(+v.toFixed(4)||null),{nf:NF,al:{horizontal:"center"}}); if(xRef)pendingF.push({cell:xc,expr:own[0].expr}); if(xnote[c].length>1||g.xcols[+c-14]==="Others")xc.note=xnote[c].join("\n"); });
           Object.entries(latest).forEach(([k,e])=>{ const qRef=exprRefs(e.expr).length>0, qx=!qRef&&e.expr&&/[-+*/()]/.test(String(e.expr).replace(/^\s*[=-]/,""))&&isFinite(calcExpr(e.expr))?String(e.expr).replace(/^\s*=/,"").replace(/\s+/g,""):null; const cell=put(r,SUP0+g.supIdx[k],qx?{formula:qx,result:+e.rate||0}:(+e.rate||0),{fill:used.has(k)?C_SEL:C_OTHER,nf:NF,al:{horizontal:"center",wrapText:true}}); if(qRef)pendingF.push({cell,expr:e.expr});
             const note=[e.component&&e.component!=="subcon"&&(CLABEL[e.component]||(ccomps.find(x=>x.key===e.component)||{}).label||e.component),e.location&&`@ ${e.location}`,e.date&&`Date: ${e.date}`,e.note].filter(Boolean).join("\n"); if(note)cell.note=note; });
+          // notes typed on cost-data entries, visible in the Notes column (also kept as hover comments on the supplier cells)
+          { const nts=(it.costData||[]).filter(e=>String(e.note||"").trim()).map(e=>`${e.supplier?e.supplier+": ":""}${String(e.note).trim()}`); if(nts.length)put(r,notesCol,nts.join("\n"),{al:{wrapText:true}}); }
           // embed this item's photos after the supplier columns, on the same row
           const itemPhotos=(it.costData||[]).flatMap(e=>e.imgs&&e.imgs.length?e.imgs:(e.img?[e.img]:[])).slice(0,12);
           // full stored photo (no re-compression), shown up to 210x160 px keeping its shape; enlarging it in Excel stays sharp
@@ -1052,8 +1056,8 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                   {xs.map(x=><div key={x.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
                     <input list="extraNames" placeholder="Name (e.g. Scaffold)" autoFocus={!x.name} style={{...inp,width:180}} value={x.name} onChange={e=>setXs(xs.map(y=>y.id===x.id?{...y,name:e.target.value}:y))}/>
                     {(()=>{ const txt=x.expr??(x.value===""||x.value==null?"":String(x.value)); const isF=/[-+*/()]/.test(txt.replace(/^\s*-/,"")); const bad=txt.trim()!==""&&!isFinite(calcExpr(txt));
-                      return <><input title="Type a number or a formula, e.g. ((1+1)*2)+((3*1)+2)" style={{...inp,width:isF?190:80,textAlign:"right",borderColor:bad?"#ef4444":"#e2e8f0"}} value={txt} onChange={e=>{ const t=e.target.value, n=calcExpr(t); setXs(xs.map(y=>y.id===x.id?{...y,expr:t,value:t.trim()===""?"":(isFinite(n)?n:(y.value??""))}:y)); }}/>
-                        {isF&&<span style={{fontSize:12,color:bad?"#ef4444":"#475569",whiteSpace:"nowrap"}}>{bad?"check formula":`= ${fmt(calcExpr(txt))}`}</span>}</>; })()}
+                      return <><input title={isF?`ƒ ${txt}`:"Type a number or a formula, e.g. ((1+1)*2)+((3*1)+2)"} onFocus={()=>setEditExpr(x.id)} onBlur={()=>setEditExpr(null)} style={{...inp,width:isF&&editExpr===x.id?190:80,textAlign:"right",borderColor:bad?"#ef4444":"#e2e8f0"}} value={editExpr===x.id||!isF||bad?txt:String(+(+x.value||0).toFixed(4))} onChange={e=>{ const t=e.target.value, n=calcExpr(t); setXs(xs.map(y=>y.id===x.id?{...y,expr:t,value:t.trim()===""?"":(isFinite(n)?n:(y.value??""))}:y)); }}/>
+                        {isF&&<span style={{fontSize:12,color:bad?"#ef4444":editExpr===x.id?"#475569":"#94a3b8",whiteSpace:"nowrap",fontStyle:bad||editExpr===x.id?"normal":"italic"}} title={txt}>{bad?"check formula":editExpr===x.id?`= ${fmt(calcExpr(txt))}`:`ƒ ${txt.length>22?txt.slice(0,22)+"…":txt}`}</span>}</>; })()}
                     {x.type==="%"?<span style={{fontSize:12,color:"#475569",minWidth:90}}>% = S$ {fmt(extraAmt(item,x))}</span>:<span style={{fontSize:12,color:"#94a3b8"}}>S$</span>}
                     <button onClick={()=>setXs(xs.filter(y=>y.id!==x.id))} title="Remove" style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>✕</button>
                   </div>)}
@@ -1785,8 +1789,8 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                       <tr key={e.id} style={{borderBottom:"1px solid #f8fafc",background:e.inRate?"#ecfdf5":undefined}}>
                         <td style={{padding:"6px 6px",textAlign:"center"}}><input type="checkbox" checked={!!e.inRate} onChange={()=>toggleInRate(e.id)} title="Include this in the item's rate" style={{accentColor:"#059669",cursor:"pointer",width:15,height:15}}/></td>
                         <td style={{padding:"6px 8px"}}><input value={e.supplier||""} onChange={ev=>updCostEntry(e.id,{supplier:ev.target.value})} style={{width:"100%",border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:12,fontWeight:600,color:"#1e293b",outline:"none",background:"#f8fafc"}}/></td>
-                        <td style={{padding:"6px 8px",textAlign:"right"}}><input title={e.expr?`= S$ ${fmt(e.rate)}`:"Type a number or a formula, e.g. =(100+20)/2"} value={e.expr??(e.rate??"")} onChange={ev=>{ const t=ev.target.value, n=calcExpr(t); updCostEntry(e.id,{expr:(/[-+*/()]/.test(String(t).replace(/^\s*[=-]/,""))||String(n)!==t.trim())?t:null, /* keep the typed text (e.g. "2239." while typing a decimal) unless it is exactly the plain number */...(isFinite(n)?{rate:Math.round(n*10000)/10000}:t.trim()===""?{rate:0}:{})}); }} style={{width:e.expr?150:90,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:13,fontWeight:700,color:"#1d4ed8",outline:"none",textAlign:"right",background:"#f8fafc"}}/>{e.expr&&(()=>{ const refs=exprRefs(e.expr), miss=refs.filter(c=>!findBurByCode(burItemsRef.current,c)), self=refs.filter(c=>{const t=findBurByCode(burItemsRef.current,c);return t&&t.id===modalItem.id;}), n=calcExpr(e.expr);
-                          return <div style={{fontSize:10,marginTop:2,whiteSpace:"nowrap",color:miss.length||self.length||!isFinite(n)?"#dc2626":"#059669"}}>{miss.length?`code not found: ${miss.join(", ")}`:self.length?"can't use this item's own code":!isFinite(n)?"check formula":<>= S$ {fmt(n)}{!e.inRate&&<span style={{color:"#b45309"}}> · tick ✓ to use</span>}</>}</div>; })()}</td>
+                        <td style={{padding:"6px 8px",textAlign:"right"}}><input title={e.expr?`ƒ ${e.expr}`:"Type a number or a formula, e.g. =(100+20)/2 or =rebar_kg+0.13"} onFocus={()=>setEditExpr(e.id)} onBlur={()=>setEditExpr(null)} value={editExpr===e.id||!e.expr||!isFinite(calcExpr(e.expr))?(e.expr??(e.rate??"")):String(+(+e.rate||0).toFixed(4))} onChange={ev=>{ const t=ev.target.value, n=calcExpr(t); updCostEntry(e.id,{expr:(/[-+*/()]/.test(String(t).replace(/^\s*[=-]/,""))||String(n)!==t.trim())?t:null, /* keep the typed text (e.g. "2239." while typing a decimal) unless it is exactly the plain number */...(isFinite(n)?{rate:Math.round(n*10000)/10000}:t.trim()===""?{rate:0}:{})}); }} style={{width:e.expr&&editExpr===e.id?150:90,border:"1px solid transparent",borderRadius:5,padding:"4px 6px",fontSize:13,fontWeight:700,color:"#1d4ed8",outline:"none",textAlign:"right",background:"#f8fafc"}}/>{e.expr&&(()=>{ const refs=exprRefs(e.expr), miss=refs.filter(c=>!findBurByCode(burItemsRef.current,c)), self=refs.filter(c=>{const t=findBurByCode(burItemsRef.current,c);return t&&t.id===modalItem.id;}), n=calcExpr(e.expr);
+                          return <div style={{fontSize:10,marginTop:2,whiteSpace:"nowrap",color:miss.length||self.length||!isFinite(n)?"#dc2626":"#059669"}}>{miss.length?`code not found: ${miss.join(", ")}`:self.length?"can't use this item's own code":!isFinite(n)?"check formula":<>{editExpr===e.id?<>= S$ {fmt(n)}</>:<span style={{color:"#94a3b8",fontStyle:"italic"}} title={e.expr}>ƒ {String(e.expr).length>22?String(e.expr).slice(0,22)+"…":e.expr}</span>}{!e.inRate&&<span style={{color:"#b45309"}}> · tick ✓ to use</span>}</>}</div>; })()}</td>
                         <td style={{padding:"6px 8px",whiteSpace:"nowrap",fontSize:11,color:"#64748b"}} title={`Rate is per what? And how many ${modalItem.unit} does ONE of it cover? e.g. per no., 1 no. = 50 ${modalItem.unit}`}>
                           per <input value={e.per||""} placeholder={modalItem.unit} onChange={ev=>updCostEntry(e.id,{per:ev.target.value})} style={{width:44,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 5px",fontSize:11,outline:"none"}}/>
                           {e.per&&String(e.per).trim().toLowerCase()!==String(modalItem.unit||"").trim().toLowerCase()&&<> · 1 = <input value={e.cover??""} placeholder="?" onChange={ev=>updCostEntry(e.id,{cover:ev.target.value})} style={{width:60,border:"1px solid "+(String(e.cover??"").trim()!==""&&!isFinite(calcExpr(e.cover))?"#ef4444":"#e2e8f0"),borderRadius:5,padding:"3px 5px",fontSize:11,outline:"none",textAlign:"right"}}/> {modalItem.unit}
