@@ -75,10 +75,10 @@ const fmt=n=>(n||0).toLocaleString("en-SG",{minimumFractionDigits:2,maximumFract
 // Work out a typed calculation like "((1+1)*2)+((3*1)+2)" or "=12.5*1.1". Only numbers, + - * / and brackets; returns NaN if invalid.
 // A BUR code inside a formula stands for that item's current rate, e.g. "=rebar+0.13". The app sets exprLookup (code -> rate).
 let exprLookup=null;
-const exprRefs=str=>(String(str??"").replace(/^\s*=/,"").match(/[A-Za-z_][A-Za-z0-9_.]*/g)||[]);
-const calcExpr=str=>{ const s=String(str??"").replace(/^\s*=/,"").replace(/\s+/g,""); if(!s||/[^0-9A-Za-z_.+\-*/()]/.test(s))return NaN; let i=0;
+const exprRefs=str=>(String(str??"").replace(/^\s*=/,"").match(/[A-Za-z_][A-Za-z0-9_.&]*/g)||[]); // codes may contain "&" (e.g. Door_S&I_no)
+const calcExpr=str=>{ const s=String(str??"").replace(/^\s*=/,"").replace(/\s+/g,""); if(!s||/[^0-9A-Za-z_.&+\-*/()]/.test(s))return NaN; let i=0;
   const num=()=>{ const m=/^\d+\.?\d*|^\.\d+/.exec(s.slice(i)); if(!m)return NaN; i+=m[0].length; return parseFloat(m[0]); };
-  const fac=()=>{ if(/[A-Za-z_]/.test(s[i]||"")){ const m=/^[A-Za-z_][A-Za-z0-9_.]*/.exec(s.slice(i)); i+=m[0].length; return exprLookup?+exprLookup(m[0]):NaN; } if(s[i]==="-"){i++;return -fac();} if(s[i]==="+"){i++;return fac();} if(s[i]==="("){i++; const v=sum(); if(s[i]!==")")return NaN; i++; return v;} return num(); };
+  const fac=()=>{ if(/[A-Za-z_]/.test(s[i]||"")){ const m=/^[A-Za-z_][A-Za-z0-9_.&]*/.exec(s.slice(i)); i+=m[0].length; return exprLookup?+exprLookup(m[0]):NaN; } if(s[i]==="-"){i++;return -fac();} if(s[i]==="+"){i++;return fac();} if(s[i]==="("){i++; const v=sum(); if(s[i]!==")")return NaN; i++; return v;} return num(); };
   const prod=()=>{ let v=fac(); while(s[i]==="*"||s[i]==="/"){ const op=s[i++], r=fac(); v=op==="*"?v*r:v/r; } return v; };
   const sum=()=>{ let v=prod(); while(s[i]==="+"||s[i]==="-"){ const op=s[i++], r=prod(); v=op==="+"?v+r:v-r; } return v; };
   const v=sum(); return i===s.length&&isFinite(v)?v:NaN; };
@@ -581,7 +581,7 @@ export default function App(){
       // Colour whole rows/columns like the master sheet: header row yellow, category rows orange, and every column keeps its
       // colour all the way down (grey text area, purple Rate, cyan Quote, pink %, pale blue build-up, pink supplier quotes).
       // turn code-linked formulas into Excel links to the linked item's Rate cell, e.g. =rebar+0.13 -> =$E$1903+0.13
-      pendingF.forEach(({cell,expr})=>{ let ok=true; const f=String(expr).replace(/^\s*=/,"").replace(/\s+/g,"").replace(/[A-Za-z_][A-Za-z0-9_.]*/g,m=>{ const row=codeRow[m.toLowerCase()]; if(!row){ok=false;return m;} return "$E$"+row; }); if(ok)cell.value={formula:f,result:typeof cell.value==="number"?cell.value:undefined}; });
+      pendingF.forEach(({cell,expr})=>{ let ok=true; const f=String(expr).replace(/^\s*=/,"").replace(/\s+/g,"").replace(/[A-Za-z_][A-Za-z0-9_.&]*/g,m=>{ const row=codeRow[m.toLowerCase()]; if(!row){ok=false;return m;} return "$E$"+row; }); if(ok)cell.value={formula:f,result:typeof cell.value==="number"?cell.value:undefined}; });
       const lastCol=SUP0+Math.max(maxSup,4)-1;
       const colFill=c=>c===5?C_RATE:c===8?C_QUOTE:c===9?"FFE6B8B7":(c>=10&&c<=17)?"FFDDEBF7":(c>=SUP0&&c<=lastCol)?C_OTHER:c===7?"FFFDE2E2":"FFF2F2F2";
       for(let rr=5;rr<r;rr++) for(let c=1;c<=lastCol;c++){ const cell=ws.getCell(rr,c); if(cell.fill&&cell.fill.type==="pattern")continue;
