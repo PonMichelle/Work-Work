@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 import { auth, db } from "./firebase";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch, getDoc } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch, getDoc, getDocs, query, where } from "firebase/firestore";
 // NOTE: BUR items are scoped per project via a `pid` field.
 import burSeed from "./burSeed.json"; // master BUR list imported from BUR.xlsx
 import SheetGrid from "./SheetGrid.jsx";
@@ -201,6 +201,7 @@ export default function App(){
   const [burItems,setBurItems]=useState([]);
   const [selCat,setSelCat]=useState(DEF_CATS[0].id);
   const [expBur,setExpBur]=useState(null);
+  const [syncState,setSyncState]=useState(null); // "Sync from project" window: {src, loading, rows:[{key,kind,cur,src,diffs}], sel:Set, opts}
   const [collapsedSubs,setCollapsedSubs]=useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("burCollapsedSubs")||"[]")); }catch{ return new Set(); } }); // "catId|sub-category" keys folded in the BUR table
   const [burSearch,setBurSearch]=useState(""); const [burSearchCat,setBurSearchCat]=useState(false);
   const [sortBy,setSortBy]=useState("code"); const [sortDir,setSortDir]=useState(1);
@@ -613,6 +614,9 @@ export default function App(){
         for(let i=0;i<e.items.length;i+=400){ const batch=writeBatch(db); e.items.slice(i,i+400).forEach(({id,before})=>batch.update(doc(db,"bur",id),before)); await batch.commit(); }
       }else if(e.kind==="deleted"){
         for(let i=0;i<e.docs.length;i+=400){ const batch=writeBatch(db); e.docs.slice(i,i+400).forEach(({id,data})=>batch.set(doc(db,"bur",id),data)); await batch.commit(); }
+      }else if(e.kind==="multi"){
+        for(const part of e.parts){ if(part.kind==="fields"){ setBurItems(prev=>prev.map(b=>{ const it=part.items.find(x=>x.id===b.id); return it?{...b,...it.before}:b; })); for(let i=0;i<part.items.length;i+=400){ const batch=writeBatch(db); part.items.slice(i,i+400).forEach(({id,before})=>batch.update(doc(db,"bur",id),before)); await batch.commit(); } }
+          else if(part.kind==="created"){ for(let i=0;i<part.ids.length;i+=400){ const batch=writeBatch(db); part.ids.slice(i,i+400).forEach(id=>batch.delete(doc(db,"bur",id))); await batch.commit(); } } }
       }else if(e.kind==="created"){
         for(let i=0;i<e.ids.length;i+=400){ const batch=writeBatch(db); e.ids.slice(i,i+400).forEach(id=>batch.delete(doc(db,"bur",id))); await batch.commit(); }
       }
@@ -873,6 +877,35 @@ export default function App(){
       toast_(newIds.length===1?"⧉ Copied — edit the new item below":`⧉ Copied ${newIds.length} item(s)`);
     }catch(e){ toast_("⚠️ Copy failed: "+(e&&e.message||e)); } };
   // Change one unit to another on every BUR item in this project (e.g. nr -> no.), fixing the "_unit" ending of their codes too.
+  // ── Sync from another project ────────────────────────────────────────────
+  // Compares this project's BUR with another project's by code and lists what is different there ("changed") or only there ("new").
+  // Nothing in this project is deleted. The chosen groups of fields are copied; the whole sync can be undone in one step.
+  const SYNC_GROUPS={rate:{label:"Rates & build-up",keys:["labour","material","plant","subcon","waste","discount","extras","roundUp","preTick"]},
+    text:{label:"Description & unit",keys:["desc","unit"]}, cd:{label:"Quotes & photos (Cost Data)",keys:["costData"]}, cat:{label:"Category & sub-category",keys:["catId","group","ord"]}};
+  const syncNorm=(b,k)=>{ const v=b[k]; if(k==="costData")return JSON.stringify((v||[]).map(e=>[e.component,e.supplier,+e.rate||0,e.expr||"",e.date||"",e.location||"",e.note||"",!!e.inRate,(e.imgs||[]).length,e.per||"",e.cover||""]));
+    if(k==="extras")return JSON.stringify((v||[]).map(x=>[x.name,x.type,+x.value||0,x.expr||""])); if(["labour","material","plant","subcon","waste","discount"].includes(k))return +v||0; if(v==null||v==="")return ""; return typeof v==="object"?JSON.stringify(v):String(v); };
+  const openSync=()=>setSyncState({src:"",rows:[],sel:new Set(),opts:{rate:true,text:true,cd:true,cat:true}});
+  const loadSync=async src=>{ setSyncState(st=>({...st,src,loading:true,rows:[],sel:new Set()})); if(!src)return setSyncState(st=>({...st,loading:false}));
+    try{ const snap=await getDocs(query(collection(db,"bur"),where("pid","==",src))); const srcItems=snap.docs.map(d=>({id:d.id,...d.data()}));
+      const mine=burItemsRef.current, rows=[];
+      srcItems.forEach(sb=>{ if(!sb.code)return; const cb=findBurByCode(mine,sb.code);
+        if(!cb){ rows.push({key:sb.id,kind:"new",src:sb}); return; }
+        const diffs=Object.entries(SYNC_GROUPS).filter(([,g])=>g.keys.some(k=>syncNorm(cb,k)!==syncNorm(sb,k))).map(([gk])=>gk);
+        if(diffs.length)rows.push({key:sb.id,kind:"changed",cur:cb,src:sb,diffs}); });
+      rows.sort((a,b)=>(a.kind===b.kind?0:a.kind==="changed"?-1:1)||String(a.src.code).localeCompare(String(b.src.code)));
+      setSyncState(st=>st&&st.src===src?{...st,loading:false,rows,sel:new Set(rows.map(r=>r.key))}:st);
+    }catch(e){ toast_("⚠️ "+e.message); setSyncState(st=>({...st,loading:false})); } };
+  const applySync=async()=>{ const st=syncState; if(!st)return; const keys=Object.entries(st.opts).filter(([,on])=>on).flatMap(([g])=>SYNC_GROUPS[g].keys);
+    const pick=st.rows.filter(r=>st.sel.has(r.key)); if(!pick.length||!keys.length){toast_("Nothing selected");return;}
+    const chg=pick.filter(r=>r.kind==="changed"), nw=pick.filter(r=>r.kind==="new"); const srcName=(projects||[]).find(p=>p.id===st.src)?.name||"other project";
+    if(!confirm(`Sync from "${srcName}"?\n\n• Update ${chg.length} item(s) (${Object.entries(st.opts).filter(([,on])=>on).map(([g])=>SYNC_GROUPS[g].label).join(", ")})\n• Add ${nw.length} new item(s)\n\nNothing is deleted. You can Undo.`))return;
+    try{ const parts=[];
+      if(chg.length){ parts.push({kind:"fields",items:chg.map(r=>({id:r.cur.id,before:Object.fromEntries(keys.map(k=>[k,r.cur[k]===undefined?null:JSON.parse(JSON.stringify(r.cur[k]))]))}))});
+        for(let i=0;i<chg.length;i+=400){ const batch=writeBatch(db); chg.slice(i,i+400).forEach(r=>batch.update(doc(db,"bur",r.cur.id),Object.fromEntries(keys.map(k=>[k,r.src[k]===undefined?null:r.src[k]])))); await batch.commit(); } }
+      if(nw.length){ const ids=[]; for(let i=0;i<nw.length;i+=400){ const batch=writeBatch(db); nw.slice(i,i+400).forEach(r=>{ const {id:_i,...data}=r.src; const ref=doc(collection(db,"bur")); ids.push(ref.id); batch.set(ref,{...data,pid}); }); await batch.commit(); } parts.push({kind:"created",ids}); }
+      pushUndo({kind:"multi",label:`Sync ${pick.length} item(s) from ${srcName}`,parts});
+      toast_(`✅ Synced from ${srcName}: ${chg.length} updated, ${nw.length} added`); setSyncState(null);
+    }catch(e){ toast_("⚠️ Sync failed: "+(e&&e.message||e)); } };
   const replaceUnit=async()=>{ const from=prompt("Replace which unit? (exactly as shown, e.g. nr)","nr"); if(from==null||!from.trim())return;
     const to=prompt(`Change every "${from.trim()}" to:`,"no."); if(to==null||!to.trim())return; const f=from.trim(), t=to.trim();
     const list=burItemsRef.current.filter(b=>String(b.unit||"").trim().toLowerCase()===f.toLowerCase()); if(!list.length){toast_(`No BUR items with unit "${f}"`);return;}
@@ -1233,6 +1266,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 {codesWithSpaces.length>0&&<button onClick={fixCodeSpaces} title={"Codes with spaces or / can't be used in formulas:\n"+codesWithSpaces.slice(0,8).map(b=>b.code).join("\n")} style={{background:"#fff7ed",color:"#c2410c",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⚠ Fix {codesWithSpaces.length} code(s) with spaces / "/"</button>}
                 {codesMissingUnit.length>0&&<button onClick={addUnitToCodes} title="Append _unit to BUR codes (e.g. Acoustic_feltCeiling → Acoustic_feltCeiling_m2)" style={{background:"#fff7ed",color:"#c2410c",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>+ _unit to {codesMissingUnit.length} codes</button>}
                 {shownSubKeys.length>0&&<><button onClick={()=>collapseAllSubs(true)} title="Fold every sub-category in this list" style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>▸ Collapse all</button><button onClick={()=>collapseAllSubs(false)} title="Unfold every sub-category in this list" style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>▾ Expand all</button></>}
+                <button onClick={openSync} title="Copy BUR changes / new items from another project into this one" style={{background:"#ecfeff",color:"#0e7490",border:"1px solid #67e8f9",borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⇅ Sync from project…</button>
                 <button onClick={replaceUnit} title="Change one unit to another on all BUR items (e.g. nr → no.)" style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>⇄ Replace unit…</button>
                 {undoLabel&&<button onClick={undoLast} title={"Undo: "+undoLabel+" (Ctrl+Z)"} style={{background:"#fff",color:"#334155",border:"1px solid #cbd5e1",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",maxWidth:260,overflow:"hidden",textOverflow:"ellipsis"}}>↶ Undo: {undoLabel}</button>}
                 <label title="Match items to a master BUR.xlsx by code and set their category + sub-category (underlined headings in column B). Codes, rates, quotes and photos are not changed." style={{background:"#f5f3ff",color:"#6d28d9",border:"1px solid #c4b5fd",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>☰ Sync categories from Excel…<input type="file" accept=".xlsx" style={{display:"none"}} onChange={e=>{const f=e.target.files[0]; e.target.value=""; subcatsFromExcel(f);}}/></label>
@@ -1611,6 +1645,48 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
 
       </div>
 
+      {/* ══ SYNC-FROM-PROJECT MODAL ══ */}
+      {syncState&&(()=>{ const st=syncState, others=(projects||[]).filter(p=>p.id!==pid), allOn=st.rows.length>0&&st.rows.every(r=>st.sel.has(r.key));
+        const setSel=fn=>setSyncState(x=>({...x,sel:fn(new Set(x.sel))})); const nChg=st.rows.filter(r=>r.kind==="changed").length, nNew=st.rows.length-nChg;
+        const th={padding:"7px 8px",textAlign:"left",fontSize:11,color:"#64748b",fontWeight:700,borderBottom:"1px solid #e2e8f0",position:"sticky",top:0,background:"#f8fafc"};
+        return (
+        <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:"#fff",borderRadius:16,width:"100%",maxWidth:980,maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 25px 60px rgba(0,0,0,.3)"}}>
+            <div style={{padding:"14px 20px",borderBottom:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <b style={{fontSize:15,color:"#1e293b"}}>⇅ Sync BUR from another project</b>
+              <select value={st.src} onChange={e=>loadSync(e.target.value)} style={{border:"1.5px solid #e2e8f0",borderRadius:8,padding:"6px 10px",fontSize:13,outline:"none",minWidth:220}}>
+                <option value="">Choose project…</option>{others.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <button onClick={()=>setSyncState(null)} style={{marginLeft:"auto",background:"#f1f5f9",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,cursor:"pointer",color:"#64748b",fontWeight:600}}>Close ✕</button>
+            </div>
+            <div style={{padding:"10px 20px",display:"flex",gap:14,flexWrap:"wrap",alignItems:"center",fontSize:12,color:"#334155",borderBottom:"1px solid #f1f5f9"}}>
+              <span style={{fontWeight:700,color:"#64748b"}}>Copy:</span>
+              {Object.entries(SYNC_GROUPS).map(([g,def])=><label key={g} style={{display:"flex",gap:4,alignItems:"center",cursor:"pointer"}}><input type="checkbox" checked={!!st.opts[g]} onChange={e=>setSyncState(x=>({...x,opts:{...x.opts,[g]:e.target.checked}}))}/>{def.label}</label>)}
+            </div>
+            <div style={{flex:1,overflow:"auto",padding:"0 20px"}}>
+              {!st.src?<div style={{padding:"40px 0",textAlign:"center",color:"#94a3b8",fontSize:13}}>Pick the project to copy from. Items are matched by BUR code; nothing in this project is deleted.</div>
+              :st.loading?<div style={{padding:"40px 0",textAlign:"center",color:"#94a3b8",fontSize:13}}>⏳ Comparing…</div>
+              :!st.rows.length?<div style={{padding:"40px 0",textAlign:"center",color:"#059669",fontSize:13}}>✅ Nothing to sync — this project already matches.</div>
+              :<table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead><tr><th style={{...th,width:30}}><input type="checkbox" checked={allOn} onChange={e=>setSel(()=>e.target.checked?new Set(st.rows.map(r=>r.key)):new Set())}/></th><th style={th}>What</th><th style={th}>Code</th><th style={th}>Description</th><th style={{...th,textAlign:"right"}}>Rate here</th><th style={{...th,textAlign:"right"}}>Rate there</th><th style={th}>Different</th></tr></thead>
+                <tbody>{st.rows.map(r=>{ const on=st.sel.has(r.key); return (
+                  <tr key={r.key} style={{borderBottom:"1px solid #f1f5f9",background:on?"#f0fdfa":"#fff"}}>
+                    <td style={{padding:"5px 8px"}}><input type="checkbox" checked={on} onChange={()=>setSel(x=>{ x.has(r.key)?x.delete(r.key):x.add(r.key); return x; })}/></td>
+                    <td style={{padding:"5px 8px"}}><span style={{background:r.kind==="new"?"#dcfce7":"#fef3c7",color:r.kind==="new"?"#166534":"#92400e",borderRadius:4,padding:"1px 6px",fontSize:10,fontWeight:700}}>{r.kind==="new"?"NEW":"CHANGED"}</span></td>
+                    <td style={{padding:"5px 8px",fontFamily:"monospace",color:"#1d4ed8",fontWeight:700}}>{r.src.code}</td>
+                    <td style={{padding:"5px 8px",color:"#334155",maxWidth:300,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={r.src.desc}>{r.src.desc}</td>
+                    <td style={{padding:"5px 8px",textAlign:"right",color:"#64748b"}}>{r.cur?fmt(bTot(r.cur)):"—"}</td>
+                    <td style={{padding:"5px 8px",textAlign:"right",fontWeight:700,color:r.cur&&Math.abs(bTot(r.cur)-bTot(r.src))>0.005?"#b45309":"#1e293b"}}>{fmt(bTot(r.src))}</td>
+                    <td style={{padding:"5px 8px",fontSize:11,color:"#64748b"}}>{r.kind==="new"?"only in that project":r.diffs.map(d=>SYNC_GROUPS[d].label).join(", ")}</td>
+                  </tr>); })}</tbody>
+              </table>}
+            </div>
+            <div style={{padding:"12px 20px",borderTop:"1px solid #f1f5f9",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              {st.rows.length>0&&<span style={{fontSize:12,color:"#64748b"}}>{nChg} changed · {nNew} new · <b>{st.sel.size} selected</b></span>}
+              <button onClick={applySync} disabled={!st.sel.size} style={{marginLeft:"auto",background:st.sel.size?"#0e7490":"#cbd5e1",color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:13,fontWeight:700,cursor:st.sel.size?"pointer":"default"}}>⇅ Sync {st.sel.size} item(s)</button>
+            </div>
+          </div>
+        </div>); })()}
       {/* ══ PASTE-FROM-EXCEL MODAL ══ */}
       {pasteOpen&&(
         <div style={{position:"fixed",inset:0,background:"rgba(15,23,42,.6)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
