@@ -131,8 +131,7 @@ const parseBurWorkbook=(wb,catNames=[])=>{
 const orderByField=(list,f,inner)=>{ const first={}, minOrd={}; list.forEach((b,i)=>{ const g=String(b[f]||"").trim(); if(!(g in first))first[g]=i; if(b.ord!=null)minOrd[g]=Math.min(minOrd[g]??Infinity,+b.ord); });
   const keys=Object.keys(first).sort((a,b)=>a===""?-1:b===""?1:((minOrd[a]??Infinity)-(minOrd[b]??Infinity))||a.localeCompare(b,undefined,{numeric:true}));
   return keys.flatMap(k=>{ const part=list.filter(b=>String(b[f]||"").trim()===k); return inner?inner(part):part; }); };
-// ...and inside each sub-category the same again for the sub-sub-category (item.group2)
-const orderBySubcat=list=>orderByField(list,"group",part=>orderByField(part,"group2"));
+const orderBySubcat=list=>orderByField(list,"group");
 // Codes with spaces or "/" (e.g. "cage_2SH/LH 10100") can't be used in formulas, so they get "_" instead; matching treats them as the same.
 const cleanCode=c=>String(c||"").trim().replace(/[\s/]+/g,"_");
 const findBurByCode=(items,code)=>{ const k=cleanCode(code).toLowerCase(); if(!k)return undefined; const lc=s=>cleanCode(s).toLowerCase();
@@ -518,7 +517,7 @@ export default function App(){
       const MONTHS="janfebmaraprmayjunjulaugsepoctnovdec";
       const dateKey=d=>{ const m=/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*'?(\d{4}|\d{2})(?!\d)/i.exec(String(d||"")); if(!m)return 999999; const y=+m[2]<100?2000+(+m[2]):+m[2]; return y*100+MONTHS.indexOf(m[1].toLowerCase())/3+1; };
       let maxSup=0;
-      const blockKey=it=>{ const g1=String(it.group||"").trim(), g2=String(it.group2||"").trim(); return (g2?g1+"»"+g2:g1).toLowerCase(); }; // supplier bar per sub-sub-category, else per sub-category, else category
+      const blockKey=it=>String(it.group||"").trim().toLowerCase(); // one supplier bar per sub-category; "" = items with no sub-category (bar on the category row)
       // each subcontractor in a supplier bar gets its own colour (neighbours always differ): strong for its headings, light tint for its prices
       const SUP_PAL=["FFFFD966","FFA9D08E","FFF4B183","FFC9A0DC","FF8FD3C1","FFFFB3B3","FFD9C27A","FFB4C7A3","FFF7A8D8","FFE2C37A","FF9FD6E8","FFCDB4A0","FFE6E07A","FFB8A9E8"];
       const tintOf=h=>{ const m=x=>Math.round(parseInt(x,16)+(255-parseInt(x,16))*0.6).toString(16).padStart(2,"0"); return "FF"+m(h.slice(2,4))+m(h.slice(4,6))+m(h.slice(6,8)); };
@@ -553,16 +552,13 @@ export default function App(){
           ws.getRow(r).height=20; if(lvl)ws.getRow(r).outlineLevel=lvl; r++;
           if(sp.some(x=>x.loc||x.date)){ sp.forEach((x,i)=>put(r,SUP0+i,[x.loc,x.date].filter(Boolean).join("\n")||"—",{fill:tintOf(x.color),bd:1,font:{size:9},al:{horizontal:"center",vertical:"middle",wrapText:true}})); ws.getRow(r).height=sp.some(x=>x.loc&&x.date)?25.5:14; if(lvl)ws.getRow(r).outlineLevel=lvl; r++; } };
         supBar(g.sups,0);
-        let curSub="", curSub2="";
+        let curSub="";
         for(const it of g.items){
-          const sg=String(it.group||"").trim(), s2=String(it.group2||"").trim();
-          if(sg&&sg!==curSub){ ws.getRow(r).outlineLevel=1; r++; put(r,2,sg,{font:{bold:true,underline:true}}); const sb=g.blk[sg.toLowerCase()]; if(sb&&sb.sups.length)supBar(sb.sups,1); else { ws.getRow(r).outlineLevel=1; r++; } curSub2=""; }
-          if(sg!==curSub)curSub2="";
+          const sg=String(it.group||"").trim();
+          if(sg&&sg!==curSub){ ws.getRow(r).outlineLevel=1; r++; put(r,2,sg,{font:{bold:true,underline:true}}); const sb=g.blk[sg.toLowerCase()]; if(sb&&sb.sups.length)supBar(sb.sups,1); else { ws.getRow(r).outlineLevel=1; r++; } }
           curSub=sg;
-          // sub-sub-category heading row carries that group's own supplier bar
-          if(s2&&s2!==curSub2){ ws.getRow(r).outlineLevel=sg?2:1; r++; put(r,2,"   "+s2,{font:{bold:true,italic:true,color:{argb:"FF1E3A8A"}}}); supBar(g.blk[blockKey(it)].sups,sg?2:1); }
-          curSub2=s2; const B=g.blk[blockKey(it)];
-          ws.getRow(r).outlineLevel=(sg?2:1)+(s2?1:0);
+          const B=g.blk[blockKey(it)];
+          ws.getRow(r).outlineLevel=sg?2:1;
           const row=ws.getRow(r);
           const lab=+it.labour||0,mat=+it.material||0,pl=+it.plant||0,sub=+it.subcon||0,wp=+it.waste||0;
           const latest={}; (it.costData||[]).forEach(e=>{ const k=supKey(e); if(!String(e.supplier||"").trim()||!(k in B.supIdx))return; latest[k]=e; });
@@ -612,7 +608,7 @@ export default function App(){
         const f=rr===5?C_HEAD:catRows.has(rr)?C_CAT:colFill(c); if(f)cell.fill=fill(f); if(rr===5||catRows.has(rr))cell.border={top:thin,bottom:thin}; }
       // "Subcon / Supplier" heading spans all supplier columns
       if(lastCol>SUP0){ ws.mergeCells(5,SUP0,5,lastCol); ws.getCell(5,SUP0).alignment={horizontal:"center",vertical:"middle"}; }
-      ws.properties.outlineLevelRow=3; ws.properties.outlineProperties={summaryBelow:false,summaryRight:false};
+      ws.properties.outlineLevelRow=2; ws.properties.outlineProperties={summaryBelow:false,summaryRight:false};
       ws.views=[{state:"frozen",xSplit:9,ySplit:5,topLeftCell:"J6"}];
       const out=await wb.xlsx.writeBuffer(); const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
       const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR.xlsx"; a.click(); URL.revokeObjectURL(url);
@@ -848,7 +844,6 @@ export default function App(){
   const burGrouped=!(_q&&!burSearchCat); const _ordered=burGrouped?orderBySubcat(_sorted):_sorted;
   // a single category always shows ALL its items; only an all-categories search is capped (to keep the page fast)
   const catTotal=_ordered.length; const catItems=burGrouped?_ordered:_ordered.slice(0,BUR_MAX);
-  const subsubsOf=(cid,grp)=>[...new Set(burItems.filter(b=>b.catId===cid&&(grp==null||String(b.group||"").trim()===String(grp||"").trim())).map(b=>String(b.group2||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const subcatsOf=cid=>[...new Set(burItems.filter(b=>b.catId===cid).map(b=>String(b.group||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const saveCollapsed=st=>{ try{ localStorage.setItem("burCollapsedSubs",JSON.stringify([...st])); }catch{} return st; };
   const subKey=(cid,g)=>cid+"|"+g;
@@ -864,15 +859,6 @@ export default function App(){
     if(e.shiftKey&&a>=0&&b>=0){ const on=!selBur.has(id), range=ids.slice(Math.min(a,b),Math.max(a,b)+1); setSelBur(prev=>{const s=new Set(prev); range.forEach(x=>on?s.add(x):s.delete(x)); return s;}); }
     else toggleSel(id);
     lastSelRef.current=id; };
-  const bulkSetSubSub=async v=>{ const ids=[...selBur]; if(!ids.length)return; let g=v;
-    if(v==="__new"){ g=prompt("New sub-sub-category name:"); if(g==null)return; g=g.trim(); if(!g)return; }
-    if(v==="__none")g="";
-    recordFields(ids,["group2"],`Sub-sub-category on ${ids.length} item(s)`);
-    try{ for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{group2:g})); await batch.commit();} toast_(g?`✅ ${ids.length} item(s) → ${g}`:`✅ Removed sub-sub-category from ${ids.length} item(s)`); clearSel(); }catch(e){ toast_("⚠️ "+e.message); } };
-  const renameSubSub=async(cid,grp,oldName)=>{ const nn=prompt(`Rename sub-sub-category "${oldName}" to:\n(leave empty to remove the heading)`,oldName); if(nn==null)return; const g=nn.trim(); if(g===oldName)return;
-    const ids=burItemsRef.current.filter(b=>b.catId===cid&&String(b.group||"").trim()===grp&&String(b.group2||"").trim()===oldName).map(b=>b.id); if(!ids.length)return;
-    recordFields(ids,["group2"],`Rename sub-sub-category "${oldName}"`);
-    try{ for(let i=0;i<ids.length;i+=400){const batch=writeBatch(db); ids.slice(i,i+400).forEach(id=>batch.update(doc(db,"bur",id),{group2:g})); await batch.commit();} toast_("✅ Sub-sub-category updated"); }catch(e){ toast_("⚠️ "+e.message); } };
   const bulkSetSubcat=async v=>{ const ids=[...selBur]; if(!ids.length)return; let g=v;
     if(v==="__new"){ g=prompt("New sub-category name (e.g. ALUMINIUM FIN):"); if(g==null)return; g=g.trim(); if(!g)return; }
     if(v==="__none")g="";
@@ -921,7 +907,7 @@ export default function App(){
   // Compares this project's BUR with another project's by code and lists what is different there ("changed") or only there ("new").
   // Nothing in this project is deleted. The chosen groups of fields are copied; the whole sync can be undone in one step.
   const SYNC_GROUPS={rate:{label:"Rates & build-up",keys:["labour","material","plant","subcon","waste","discount","extras","roundUp","preTick"]},
-    text:{label:"Description & unit",keys:["desc","unit"]}, cd:{label:"Quotes & photos (Cost Data)",keys:["costData"]}, cat:{label:"Category & sub-category",keys:["catId","group","group2","ord"]}};
+    text:{label:"Description & unit",keys:["desc","unit"]}, cd:{label:"Quotes & photos (Cost Data)",keys:["costData"]}, cat:{label:"Category & sub-category",keys:["catId","group","ord"]}};
   const syncNorm=(b,k)=>{ const v=b[k]; if(k==="costData")return JSON.stringify((v||[]).map(e=>[e.component,e.supplier,+e.rate||0,e.expr||"",e.date||"",e.location||"",e.note||"",!!e.inRate,(e.imgs||[]).length,e.per||"",e.cover||""]));
     if(k==="extras")return JSON.stringify((v||[]).map(x=>[x.name,x.type,+x.value||0,x.expr||""])); if(["labour","material","plant","subcon","waste","discount"].includes(k))return +v||0; if(v==null||v==="")return ""; return typeof v==="object"?JSON.stringify(v):String(v); };
   const openSync=()=>setSyncState({src:"",rows:[],sel:new Set(),opts:{rate:true,text:true,cd:true,cat:true}});
@@ -1057,15 +1043,11 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
             const isExp=expBur===item.id; const total=bTot(item); const direct=baseDirect(item); const xs=item.extras||[]; const setXs=v=>updBur(item.id,{extras:v}); const cdVis=(item.costData||[]).filter(e=>tabExists(e.component)), cdCount=cdVis.length, cdTip=Object.entries(cdVis.reduce((o,e)=>{const l=compLabel(e.component);o[l]=(o[l]||0)+1;return o;},{})).map(([l,n])=>`${l}: ${n}`).join(" · "); const dup=isDupCode(item.code); const checked=selBur.has(item.id);
             const lbl={fontSize:10,color:"#94a3b8",fontWeight:600,display:"block",marginBottom:2}; const inp={border:"1.5px solid #e2e8f0",borderRadius:6,padding:"5px 8px",fontSize:12,outline:"none"};
             const g=String(item.group||"").trim(), folded=burGrouped&&!!g&&collapsedSubs.has(subKey(item.catId,g)), newGrp=burGrouped&&g&&(ri===0||String(items[ri-1].group||"").trim()!==g), grpItems=newGrp?items.filter(x=>String(x.group||"").trim()===g):[];
-            const g2=String(item.group2||"").trim(), k2=g+"»"+g2, folded2=burGrouped&&!!g2&&collapsedSubs.has(subKey(item.catId,k2)), newGrp2=burGrouped&&g2&&(ri===0||String(items[ri-1].group2||"").trim()!==g2||String(items[ri-1].group||"").trim()!==g), grp2Items=newGrp2?items.filter(x=>String(x.group||"").trim()===g&&String(x.group2||"").trim()===g2):[];
             return(<Fragment key={item.id}>
               {newGrp&&<tr style={{background:"#f8fafc"}}><td style={{textAlign:"center",borderBottom:"1px solid #e2e8f0"}}><input type="checkbox" title="Select all in this sub-category" checked={grpItems.every(x=>selBur.has(x.id))} onChange={e=>setSelBur(prev=>{const s=new Set(prev); grpItems.forEach(x=>e.target.checked?s.add(x.id):s.delete(x.id)); return s;})} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
                 <td colSpan={burHead.length+2} onClick={e=>{ if(e.target.tagName!=="BUTTON")toggleSub(item.catId,g); }} title={folded?"Click to expand":"Click to collapse"} style={{padding:"7px 8px",borderBottom:"1px solid #e2e8f0",fontWeight:700,color:"#0f172a",fontSize:12,cursor:"pointer",userSelect:"none"}}><span style={{display:"inline-block",width:14,color:"#64748b"}}>{folded?"▸":"▾"}</span><span style={{textDecoration:"underline"}}>{g}</span> <span style={{textDecoration:"none",fontWeight:500,color:"#94a3b8",fontSize:11}}>({grpItems.length})</span>
                   <button onClick={()=>renameSubcat(item.catId,g)} title="Rename this sub-category" style={{marginLeft:8,background:"none",border:"none",cursor:"pointer",color:"#94a3b8",fontSize:12}}>✎</button></td></tr>}
-              {newGrp2&&!folded&&<tr style={{background:"#fbfcfe"}}><td style={{textAlign:"center",borderBottom:"1px solid #eef2f7"}}><input type="checkbox" title="Select all in this sub-sub-category" checked={grp2Items.every(x=>selBur.has(x.id))} onChange={e=>setSelBur(prev=>{const st=new Set(prev); grp2Items.forEach(x=>e.target.checked?st.add(x.id):st.delete(x.id)); return st;})} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
-                <td colSpan={burHead.length+2} onClick={e=>{ if(e.target.tagName!=="BUTTON")toggleSub(item.catId,k2); }} title={folded2?"Click to expand":"Click to collapse"} style={{padding:"5px 8px 5px 30px",borderBottom:"1px solid #eef2f7",fontWeight:700,fontStyle:"italic",color:"#1e3a8a",fontSize:12,cursor:"pointer",userSelect:"none"}}><span style={{display:"inline-block",width:14,color:"#64748b",fontStyle:"normal"}}>{folded2?"▸":"▾"}</span>{g2} <span style={{fontWeight:500,color:"#94a3b8",fontSize:11,fontStyle:"normal"}}>({grp2Items.length})</span>
-                  <button onClick={()=>renameSubSub(item.catId,g,g2)} title="Rename this sub-sub-category" style={{marginLeft:8,background:"none",border:"none",cursor:"pointer",color:"#94a3b8",fontSize:12}}>✎</button></td></tr>}
-              {!folded&&!folded2&&<>
+              {!folded&&<>
               <tr style={{borderBottom:"1px solid #f8fafc",background:checked?"#ede9fe":(ri%2===1?"#f5f3ff":"#fff")}}>
                 <td style={{padding:"2px 4px",textAlign:"center"}}><input type="checkbox" title="Click to select · Shift+click to select a range" checked={checked} onChange={()=>{}} onClick={e=>clickSel(e,item.id,items)} style={{accentColor:"#7c3aed",cursor:"pointer"}}/></td>
                 <td draggable onDragStart={e=>{e.dataTransfer.setData("text/bur",item.id);e.dataTransfer.effectAllowed="move";}} title="Drag me onto a category to move • click to expand" style={{padding:"2px 4px",textAlign:"center",cursor:"grab",color:isExp?"#2563eb":"#94a3b8",userSelect:"none"}} onClick={()=>setExpBur(isExp?null:item.id)}>⠿{isExp?"▼":"▶"}</td>
@@ -1091,7 +1073,6 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                   <div><label style={lbl}>ROUND UP RATE</label><select style={{...inp,width:110}} value={hasRoundUp(item)?String(item.roundUp):""} onChange={e=>updBur(item.id,{roundUp:e.target.value===""?null:+e.target.value})}>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
                   <div><label style={lbl}>CATEGORY</label><select style={{...inp,background:"#fff"}} value={item.catId||"cat13"} onChange={e=>updBur(item.id,{catId:e.target.value})}>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
                   <div><label style={lbl}>SUB-CATEGORY</label><input list={"subcats_"+item.id} style={{...inp,width:200}} placeholder="(none)" value={item.group||""} onChange={e=>updBur(item.id,{group:e.target.value})}/><datalist id={"subcats_"+item.id}>{subcatsOf(item.catId).map(g=><option key={g} value={g}/>)}</datalist></div>
-                  <div><label style={lbl}>SUB-SUB-CATEGORY</label><input list={"subsubs_"+item.id} style={{...inp,width:200}} placeholder="(none)" value={item.group2||""} onChange={e=>updBur(item.id,{group2:e.target.value})}/><datalist id={"subsubs_"+item.id}>{subsubsOf(item.catId,item.group).map(g=><option key={g} value={g}/>)}</datalist></div>
                   <div style={{marginLeft:"auto",fontSize:12,color:"#475569"}}>Direct <b>S$ {fmt(direct)}</b>{+item.discount?<> · Discount ({+item.discount}%) <b style={{color:"#dc2626"}}>−S$ {fmt(discAmt(item))}</b></>:null}{+item.waste?<> · Waste/ OH ({+item.waste}%) <b>S$ {fmt(wasteAmt(item))}</b></>:null}{xs.length?<> · Extras <b>S$ {fmt(extrasTot(item))}</b></>:null} · <span style={{color:"#1d4ed8",fontWeight:800}}>Rate S$ {fmt(total)}/{item.unit}</span></div>
                 </div>
                 <div style={{marginTop:12,paddingTop:10,borderTop:"1px dashed #e2e8f0"}}>
@@ -1337,8 +1318,6 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <b style={{fontSize:12,color:"#5b21b6"}}>{selBur.size} selected</b>
                 <span style={{fontSize:11,color:"#475569"}}>Sub-category:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkSetSubcat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff",maxWidth:180}}><option value="">Sub-category…</option><option value="__new">＋ New…</option><option value="__none">(none)</option>{subcatsOf(selCat).map(g=><option key={g} value={g}>{g}</option>)}</select>
-                <span style={{fontSize:11,color:"#475569"}}>Sub-sub:</span>
-                <select value="" onChange={e=>{if(e.target.value)bulkSetSubSub(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff",maxWidth:180}}><option value="">Sub-sub…</option><option value="__new">＋ New…</option><option value="__none">(none)</option>{subsubsOf(selCat).map(g=><option key={g} value={g}>{g}</option>)}</select>
                 <span style={{fontSize:11,color:"#475569"}}>Move to:</span>
                 <select value="" onChange={e=>{if(e.target.value)bulkMoveCat(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="">Category…</option>{[...cats].filter(c=>c.id!==selCat).sort((a,b)=>String(a.name).localeCompare(String(b.name))).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select>
                 <span style={{fontSize:11,color:"#475569"}}>Set unit:</span>
