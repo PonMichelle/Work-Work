@@ -595,6 +595,8 @@ export default function App(){
       const colFill=c=>c===5?C_RATE:c===8?C_QUOTE:c===9?"FFE6B8B7":(c>=10&&c<=17)?"FFDDEBF7":(c>=SUP0&&c<=lastCol)?C_OTHER:c===7?"FFFDE2E2":"FFF2F2F2";
       for(let rr=5;rr<r;rr++) for(let c=1;c<=lastCol;c++){ const cell=ws.getCell(rr,c); if(cell.fill&&cell.fill.type==="pattern")continue;
         const f=rr===5?C_HEAD:catRows.has(rr)?C_CAT:colFill(c); if(f)cell.fill=fill(f); if(rr===5||catRows.has(rr))cell.border={top:thin,bottom:thin}; }
+      // "Subcon / Supplier" heading spans all supplier columns
+      if(lastCol>SUP0){ ws.mergeCells(5,SUP0,5,lastCol); ws.getCell(5,SUP0).alignment={horizontal:"center",vertical:"middle"}; }
       ws.properties.outlineLevelRow=2; ws.properties.outlineProperties={summaryBelow:false,summaryRight:false};
       ws.views=[{state:"frozen",xSplit:9,ySplit:5,topLeftCell:"J6"}];
       const out=await wb.xlsx.writeBuffer(); const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
