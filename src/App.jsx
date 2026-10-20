@@ -510,11 +510,16 @@ export default function App(){
       const orderedCats=catSort==="none"?cats:[...cats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
       for(const cat of orderedCats){ known.add(cat.id); const items=orderBySubcat(burItems.filter(b=>b.catId===cat.id).sort((a,b)=>(a.code||"").localeCompare(b.code||""))); if(items.length)groups.push({name:cat.name,items}); }
       const orphan=orderBySubcat(burItems.filter(b=>!known.has(b.catId)).sort((a,b)=>(a.code||"").localeCompare(b.code||""))); if(orphan.length)groups.push({name:"(Uncategorised)",items:orphan});
-      // per category: one column per supplier + quote date (case-insensitive), e.g. "Kiong Gay (Jan 24)" and "Kiong Gay (SLA Sep 26)" are separate columns
-      const supKey=e=>(String(e.supplier||"").trim()+"|"+String(e.date||"").trim()).toLowerCase();
+      // per category: one column per supplier + date + project/location (case-insensitive). Columns are ordered supplier A–Z,
+      // then date (oldest first), then project, so all quotes from one subcon sit together under one merged name heading.
+      const supKey=e=>[e.supplier,e.date,e.location].map(v=>String(v||"").trim()).join("|").toLowerCase();
+      const MONTHS="janfebmaraprmayjunjulaugsepoctnovdec";
+      const dateKey=d=>{ const m=/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*'?(\d{4}|\d{2})(?!\d)/i.exec(String(d||"")); if(!m)return 999999; const y=+m[2]<100?2000+(+m[2]):+m[2]; return y*100+MONTHS.indexOf(m[1].toLowerCase())/3+1; };
       let maxSup=0;
       groups.forEach(g=>{ const sups=[]; const idx={};
-        g.items.forEach(it=>(it.costData||[]).forEach(e=>{ const nm=String(e.supplier||"").trim(); if(!nm)return; const k=supKey(e); if(!(k in idx)){idx[k]=sups.length;sups.push({name:nm,dates:new Set()});} if(e.date)sups[idx[k]].dates.add(e.date); }));
+        g.items.forEach(it=>(it.costData||[]).forEach(e=>{ const nm=String(e.supplier||"").trim(); if(!nm)return; const k=supKey(e); if(!(k in idx)){idx[k]=sups.length;sups.push({key:k,name:nm,date:String(e.date||"").trim(),loc:String(e.location||"").trim(),dates:new Set()});} if(e.date)sups[idx[k]].dates.add(e.date); }));
+        sups.sort((a,b)=>a.name.toLowerCase().localeCompare(b.name.toLowerCase())||dateKey(a.date)-dateKey(b.date)||a.loc.toLowerCase().localeCompare(b.loc.toLowerCase())||a.date.localeCompare(b.date));
+        sups.forEach((x,i)=>{ idx[x.key]=i; });
         g.sups=sups; g.supIdx=idx; maxSup=Math.max(maxSup,sups.length);
         const xn=[]; g.items.forEach(it=>(it.extras||[]).forEach(x=>{ const n=String(x.name||"").trim()||"Other"; if(!xn.some(y=>y.toLowerCase()===n.toLowerCase()))xn.push(n); }));
         g.xcols=xn.length>4?[...xn.slice(0,3),"Others"]:xn; g.xcol=n=>{ const i=g.xcols.findIndex(y=>y.toLowerCase()===n.toLowerCase()); return 14+(i>=0?i:3); }; });
@@ -533,8 +538,12 @@ export default function App(){
         // category heading row: name in A (orange), component labels, then supplier names over their rate columns
         put(r,1,g.name,{font:{bold:true,underline:true},fill:C_CAT,bd:1}); catRows.add(r);
         [[7,"Discount"],[8,"Quote"],[9,"%"],[10,"Waste/ OH"],[11,"Labour"],[12,"Material"],[13,"Plant"],...g.xcols.map((n,i)=>[14+i,n])].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center",wrapText:true}}));
-        g.sups.forEach((s,i)=>{ const d=[...s.dates]; put(r,SUP0+i,s.name+(d.length===1?`\n(${d[0]})`:""),{fill:C_SUPHDR,bd:1,al:{horizontal:"center",wrapText:true}}); });
-        ws.getRow(r).height=g.sups.some(s=>s.dates.size===1)?25.5:12.75; r++;
+        for(let i=0;i<g.sups.length;){ let j=i; while(j+1<g.sups.length&&g.sups[j+1].name.toLowerCase()===g.sups[i].name.toLowerCase())j++;
+          for(let c=i;c<=j;c++)put(r,SUP0+c,c===i?g.sups[i].name:null,{font:{bold:true},fill:C_SUPHDR,bd:1,al:{horizontal:"center",vertical:"middle",wrapText:true}});
+          if(j>i)ws.mergeCells(r,SUP0+i,r,SUP0+j); i=j+1; }
+        const subHdr=g.sups.some(x=>x.loc||x.date);
+        ws.getRow(r).height=20; r++;
+        if(subHdr){ g.sups.forEach((x,i)=>put(r,SUP0+i,[x.loc,x.date].filter(Boolean).join("\n")||"—",{fill:C_SUPHDR,bd:1,font:{size:9},al:{horizontal:"center",vertical:"middle",wrapText:true}})); ws.getRow(r).height=g.sups.some(x=>x.loc&&x.date)?25.5:14; r++; }
         let curSub="";
         for(const it of g.items){
           const sg=String(it.group||"").trim(); if(sg&&sg!==curSub){ ws.getRow(r).outlineLevel=1; r++; put(r,2,sg,{font:{bold:true,underline:true}}); ws.getRow(r).outlineLevel=1; r++; } curSub=sg;
