@@ -540,7 +540,7 @@ export default function App(){
       HEAD.forEach(([c,t,h])=>put(5,c,t,{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:h,wrapText:true}}));
       put(5,notesCol,"Notes",{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:"left"}}); ws.getColumn(notesCol).width=45;
       put(5,photoCol,"Photos",{font:{bold:true},fill:C_HEAD,bd:1,al:{horizontal:"center"}});
-      let r=7, count=0, photoCount=0; const catRows=new Set(); const codeRow={}, pendingF=[];
+      let r=7, count=0, photoCount=0; const catRows=new Set(); const codeRow={}, pendingF=[]; const rowBlock={}; /* which supplier bar each row belongs to (for colouring the supplier columns) */
       for(const g of groups){
         // category heading row: name in A (orange), component labels, then supplier names over their rate columns
         put(r,1,g.name,{font:{bold:true,underline:true},fill:C_CAT,bd:1}); catRows.add(r);
@@ -549,15 +549,15 @@ export default function App(){
         const supBar=(sp,lvl)=>{ for(let i=0;i<sp.length;){ let j=i; while(j+1<sp.length&&sp[j+1].name.toLowerCase()===sp[i].name.toLowerCase())j++;
             for(let c=i;c<=j;c++)put(r,SUP0+c,c===i?sp[i].name:null,{font:{bold:true},fill:sp[i].color,bd:1,al:{horizontal:"center",vertical:"middle",wrapText:true}});
             if(j>i)ws.mergeCells(r,SUP0+i,r,SUP0+j); i=j+1; }
-          ws.getRow(r).height=20; if(lvl)ws.getRow(r).outlineLevel=lvl; r++;
-          if(sp.some(x=>x.loc||x.date)){ sp.forEach((x,i)=>put(r,SUP0+i,[x.loc,x.date].filter(Boolean).join("\n")||"—",{fill:tintOf(x.color),bd:1,font:{size:9},al:{horizontal:"center",vertical:"middle",wrapText:true}})); ws.getRow(r).height=sp.some(x=>x.loc&&x.date)?25.5:14; if(lvl)ws.getRow(r).outlineLevel=lvl; r++; } };
+          rowBlock[r]={sups:sp}; ws.getRow(r).height=20; if(lvl)ws.getRow(r).outlineLevel=lvl; r++;
+          if(sp.some(x=>x.loc||x.date)){ sp.forEach((x,i)=>put(r,SUP0+i,[x.loc,x.date].filter(Boolean).join("\n")||"—",{fill:tintOf(x.color),bd:1,font:{size:9},al:{horizontal:"center",vertical:"middle",wrapText:true}})); ws.getRow(r).height=sp.some(x=>x.loc&&x.date)?25.5:14; if(lvl)ws.getRow(r).outlineLevel=lvl; rowBlock[r]={sups:sp}; r++; } };
         supBar(g.sups,0);
         let curSub="";
         for(const it of g.items){
           const sg=String(it.group||"").trim();
-          if(sg&&sg!==curSub){ ws.getRow(r).outlineLevel=1; r++; put(r,2,sg,{font:{bold:true,underline:true}}); const sb=g.blk[sg.toLowerCase()]; if(sb&&sb.sups.length)supBar(sb.sups,1); else { ws.getRow(r).outlineLevel=1; r++; } }
+          if(sg&&sg!==curSub){ ws.getRow(r).outlineLevel=1; r++; put(r,2,sg,{font:{bold:true,underline:true}}); const sb=g.blk[sg.toLowerCase()]; if(sb&&sb.sups.length)supBar(sb.sups,1); else { rowBlock[r]={sups:[]}; ws.getRow(r).outlineLevel=1; r++; } }
           curSub=sg;
-          const B=g.blk[blockKey(it)];
+          const B=g.blk[blockKey(it)]; rowBlock[r]=B;
           ws.getRow(r).outlineLevel=sg?2:1;
           const row=ws.getRow(r);
           const lab=+it.labour||0,mat=+it.material||0,pl=+it.plant||0,sub=+it.subcon||0,wp=+it.waste||0;
@@ -604,8 +604,11 @@ export default function App(){
       pendingF.forEach(({cell,expr})=>{ let ok=true; const f=String(expr).replace(/^\s*=/,"").replace(/\s+/g,"").replace(/[A-Za-z_][A-Za-z0-9_.&]*/g,m=>{ const row=codeRow[m.toLowerCase()]; if(!row){ok=false;return m;} return "$E$"+row; }); if(ok)cell.value={formula:f,result:typeof cell.value==="number"?cell.value:undefined}; });
       const lastCol=SUP0+Math.max(maxSup,4)-1;
       const colFill=c=>c===5?C_RATE:c===8?C_QUOTE:c===9?"FFE6B8B7":(c>=10&&c<=17)?"FFDDEBF7":(c>=SUP0&&c<=lastCol)?"FFFDF5F8":c===7?"FFFDE2E2":"FFF2F2F2";
-      for(let rr=5;rr<r;rr++) for(let c=1;c<=lastCol;c++){ const cell=ws.getCell(rr,c); if(cell.fill&&cell.fill.type==="pattern")continue;
-        const f=rr===5?C_HEAD:catRows.has(rr)?C_CAT:colFill(c); if(f)cell.fill=fill(f); if(rr===5||catRows.has(rr))cell.border={top:thin,bottom:thin}; }
+      // supplier columns are filled in that supplier's colour all the way down its bar's block (empty cells too); only the rate in use is blue
+      let curBlk=null;
+      for(let rr=5;rr<r;rr++){ if(rowBlock[rr])curBlk=rowBlock[rr]; else if(catRows.has(rr))curBlk=null;
+       for(let c=1;c<=lastCol;c++){ const cell=ws.getCell(rr,c); if(cell.fill&&cell.fill.type==="pattern")continue;
+        const f=rr===5?C_HEAD:catRows.has(rr)?C_CAT:(c>=SUP0&&curBlk&&c-SUP0<curBlk.sups.length)?tintOf(curBlk.sups[c-SUP0].color):colFill(c); if(f)cell.fill=fill(f); if(rr===5||catRows.has(rr))cell.border={top:thin,bottom:thin}; } }
       // "Subcon / Supplier" heading spans all supplier columns
       if(lastCol>SUP0){ ws.mergeCells(5,SUP0,5,lastCol); ws.getCell(5,SUP0).alignment={horizontal:"center",vertical:"middle"}; }
       ws.properties.outlineLevelRow=2; ws.properties.outlineProperties={summaryBelow:false,summaryRight:false};
