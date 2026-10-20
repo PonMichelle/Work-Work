@@ -611,7 +611,7 @@ export default function App(){
         const f=rr===5?C_HEAD:catRows.has(rr)?C_CAT:(c>=SUP0&&curBlk&&c-SUP0<curBlk.sups.length)?tintOf(curBlk.sups[c-SUP0].color):colFill(c); if(f)cell.fill=fill(f); if(rr===5||catRows.has(rr))cell.border={top:thin,bottom:thin}; } }
       // "Subcon / Supplier" heading spans all supplier columns
       if(lastCol>SUP0){ ws.mergeCells(5,SUP0,5,lastCol); ws.getCell(5,SUP0).alignment={horizontal:"center",vertical:"middle"}; }
-      ws.properties.outlineLevelRow=2; ws.properties.outlineProperties={summaryBelow:false,summaryRight:false};
+      ws.properties.outlineLevelRow=2; for(let c=10;c<=17;c++)ws.getColumn(c).outlineLevel=1; ws.properties.outlineLevelCol=1; /* columns J–Q (Waste/ OH … extra items) form one foldable group */ ws.properties.outlineProperties={summaryBelow:false,summaryRight:false};
       ws.views=[{state:"frozen",xSplit:9,ySplit:5,topLeftCell:"J6"}];
       const out=await wb.xlsx.writeBuffer(); const blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
       const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="BUR.xlsx"; a.click(); URL.revokeObjectURL(url);
