@@ -518,11 +518,14 @@ export default function App(){
       const MONTHS="janfebmaraprmayjunjulaugsepoctnovdec";
       const dateKey=d=>{ const m=/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*'?(\d{4}|\d{2})(?!\d)/i.exec(String(d||"")); if(!m)return 999999; const y=+m[2]<100?2000+(+m[2]):+m[2]; return y*100+MONTHS.indexOf(m[1].toLowerCase())/3+1; };
       let maxSup=0;
-      const blockKey=it=>String(it.group2||"").trim()?(String(it.group||"").trim()+"»"+String(it.group2).trim()).toLowerCase():"";
+      const blockKey=it=>{ const g1=String(it.group||"").trim(), g2=String(it.group2||"").trim(); return (g2?g1+"»"+g2:g1).toLowerCase(); }; // supplier bar per sub-sub-category, else per sub-category, else category
+      // each subcontractor in a supplier bar gets its own colour (neighbours always differ): strong for its headings, light tint for its prices
+      const SUP_PAL=["FFFFD966","FFA9D08E","FFF4B183","FFC9A0DC","FF8FD3C1","FFFFB3B3","FFD9C27A","FFB4C7A3","FFF7A8D8","FFE2C37A","FF9FD6E8","FFCDB4A0","FFE6E07A","FFB8A9E8"];
+      const tintOf=h=>{ const m=x=>Math.round(parseInt(x,16)+(255-parseInt(x,16))*0.6).toString(16).padStart(2,"0"); return "FF"+m(h.slice(2,4))+m(h.slice(4,6))+m(h.slice(6,8)); };
       const makeBlock=items=>{ const sups=[]; const idx={};
         items.forEach(it=>(it.costData||[]).forEach(e=>{ const nm=String(e.supplier||"").trim(); if(!nm)return; const k=supKey(e); if(!(k in idx)){idx[k]=sups.length;sups.push({key:k,name:nm,date:String(e.date||"").trim(),loc:String(e.location||"").trim(),dates:new Set()});} if(e.date)sups[idx[k]].dates.add(e.date); }));
         sups.sort((a,b)=>a.name.toLowerCase().localeCompare(b.name.toLowerCase())||dateKey(a.date)-dateKey(b.date)||a.loc.toLowerCase().localeCompare(b.loc.toLowerCase())||a.date.localeCompare(b.date));
-        sups.forEach((x,i)=>{ idx[x.key]=i; }); return {sups,supIdx:idx}; };
+        sups.forEach((x,i)=>{ idx[x.key]=i; }); let ci=-1, prev=null; sups.forEach(x=>{ const n=x.name.toLowerCase(); if(n!==prev){ci++;prev=n;} x.color=SUP_PAL[ci%SUP_PAL.length]; }); return {sups,supIdx:idx}; };
       groups.forEach(g=>{ const parts={"":[]}; g.items.forEach(it=>{ (parts[blockKey(it)]=parts[blockKey(it)]||[]).push(it); });
         g.blk={}; for(const k in parts){ g.blk[k]=makeBlock(parts[k]); maxSup=Math.max(maxSup,g.blk[k].sups.length); }
         g.sups=g.blk[""].sups; g.supIdx=g.blk[""].supIdx;
@@ -545,15 +548,15 @@ export default function App(){
         [[7,"Discount"],[8,"Quote"],[9,"%"],[10,"Waste/ OH"],[11,"Labour"],[12,"Material"],[13,"Plant"],...g.xcols.map((n,i)=>[14+i,n])].forEach(([c,t])=>put(r,c,t,{font:{bold:true},al:{horizontal:"center",wrapText:true}}));
         // supplier bar: merged supplier names on this row, project/date per column on the next row
         const supBar=(sp,lvl)=>{ for(let i=0;i<sp.length;){ let j=i; while(j+1<sp.length&&sp[j+1].name.toLowerCase()===sp[i].name.toLowerCase())j++;
-            for(let c=i;c<=j;c++)put(r,SUP0+c,c===i?sp[i].name:null,{font:{bold:true},fill:C_SUPHDR,bd:1,al:{horizontal:"center",vertical:"middle",wrapText:true}});
+            for(let c=i;c<=j;c++)put(r,SUP0+c,c===i?sp[i].name:null,{font:{bold:true},fill:sp[i].color,bd:1,al:{horizontal:"center",vertical:"middle",wrapText:true}});
             if(j>i)ws.mergeCells(r,SUP0+i,r,SUP0+j); i=j+1; }
           ws.getRow(r).height=20; if(lvl)ws.getRow(r).outlineLevel=lvl; r++;
-          if(sp.some(x=>x.loc||x.date)){ sp.forEach((x,i)=>put(r,SUP0+i,[x.loc,x.date].filter(Boolean).join("\n")||"—",{fill:C_SUPHDR,bd:1,font:{size:9},al:{horizontal:"center",vertical:"middle",wrapText:true}})); ws.getRow(r).height=sp.some(x=>x.loc&&x.date)?25.5:14; if(lvl)ws.getRow(r).outlineLevel=lvl; r++; } };
+          if(sp.some(x=>x.loc||x.date)){ sp.forEach((x,i)=>put(r,SUP0+i,[x.loc,x.date].filter(Boolean).join("\n")||"—",{fill:tintOf(x.color),bd:1,font:{size:9},al:{horizontal:"center",vertical:"middle",wrapText:true}})); ws.getRow(r).height=sp.some(x=>x.loc&&x.date)?25.5:14; if(lvl)ws.getRow(r).outlineLevel=lvl; r++; } };
         supBar(g.sups,0);
         let curSub="", curSub2="";
         for(const it of g.items){
           const sg=String(it.group||"").trim(), s2=String(it.group2||"").trim();
-          if(sg&&sg!==curSub){ ws.getRow(r).outlineLevel=1; r++; put(r,2,sg,{font:{bold:true,underline:true}}); ws.getRow(r).outlineLevel=1; r++; curSub2=""; }
+          if(sg&&sg!==curSub){ ws.getRow(r).outlineLevel=1; r++; put(r,2,sg,{font:{bold:true,underline:true}}); const sb=g.blk[sg.toLowerCase()]; if(sb&&sb.sups.length)supBar(sb.sups,1); else { ws.getRow(r).outlineLevel=1; r++; } curSub2=""; }
           if(sg!==curSub)curSub2="";
           curSub=sg;
           // sub-sub-category heading row carries that group's own supplier bar
@@ -586,7 +589,7 @@ export default function App(){
           Object.entries(xsum).forEach(([c,v])=>{ const own=(it.extras||[]).filter(x=>g.xcol(String(x.name||"").trim()||"Other")===+c), xRef=own.length===1&&exprRefs(own[0].expr).length>0, ex=!xRef&&own.length===1&&own[0].type!=="%"&&/[-+*/()]/.test(String(own[0].expr||"").replace(/^\s*[=-]/,""))?String(own[0].expr).replace(/^\s*=/,"").replace(/\s+/g,""):null;
             // a typed calculation goes into Excel as a real formula, e.g. =((1+1)*2)+((3*1)+2)
             const xc=put(r,+c,ex&&isFinite(calcExpr(ex))?{formula:ex,result:+v.toFixed(4)}:(+v.toFixed(4)||null),{nf:NF,al:{horizontal:"center"}}); if(xRef)pendingF.push({cell:xc,expr:own[0].expr}); if(xnote[c].length>1||g.xcols[+c-14]==="Others")xc.note=xnote[c].join("\n"); });
-          Object.entries(latest).forEach(([k,e])=>{ const qRef=exprRefs(e.expr).length>0, qx=!qRef&&e.expr&&/[-+*/()]/.test(String(e.expr).replace(/^\s*[=-]/,""))&&isFinite(calcExpr(e.expr))?String(e.expr).replace(/^\s*=/,"").replace(/\s+/g,""):null; const cell=put(r,SUP0+B.supIdx[k],qx?{formula:qx,result:+e.rate||0}:(+e.rate||0),{fill:used.has(k)?C_SEL:C_OTHER,nf:NF,al:{horizontal:"center",wrapText:true}}); if(qRef)pendingF.push({cell,expr:e.expr});
+          Object.entries(latest).forEach(([k,e])=>{ const qRef=exprRefs(e.expr).length>0, qx=!qRef&&e.expr&&/[-+*/()]/.test(String(e.expr).replace(/^\s*[=-]/,""))&&isFinite(calcExpr(e.expr))?String(e.expr).replace(/^\s*=/,"").replace(/\s+/g,""):null; const cell=put(r,SUP0+B.supIdx[k],qx?{formula:qx,result:+e.rate||0}:(+e.rate||0),{fill:used.has(k)?C_SEL:tintOf(B.sups[B.supIdx[k]].color),nf:NF,al:{horizontal:"center",wrapText:true}}); if(qRef)pendingF.push({cell,expr:e.expr});
             const note=[e.component&&e.component!=="subcon"&&(CLABEL[e.component]||(ccomps.find(x=>x.key===e.component)||{}).label||e.component),e.location&&`@ ${e.location}`,e.date&&`Date: ${e.date}`,e.note].filter(Boolean).join("\n"); if(note)cell.note=note; });
           // notes typed on cost-data entries, visible in the Notes column (also kept as hover comments on the supplier cells)
           { const nts=(it.costData||[]).filter(e=>String(e.note||"").trim()).map(e=>`${e.supplier?e.supplier+": ":""}${String(e.note).trim()}`); if(nts.length)put(r,notesCol,nts.join("\n"),{al:{wrapText:true}}); }
@@ -604,7 +607,7 @@ export default function App(){
       // turn code-linked formulas into Excel links to the linked item's Rate cell, e.g. =rebar+0.13 -> =$E$1903+0.13
       pendingF.forEach(({cell,expr})=>{ let ok=true; const f=String(expr).replace(/^\s*=/,"").replace(/\s+/g,"").replace(/[A-Za-z_][A-Za-z0-9_.&]*/g,m=>{ const row=codeRow[m.toLowerCase()]; if(!row){ok=false;return m;} return "$E$"+row; }); if(ok)cell.value={formula:f,result:typeof cell.value==="number"?cell.value:undefined}; });
       const lastCol=SUP0+Math.max(maxSup,4)-1;
-      const colFill=c=>c===5?C_RATE:c===8?C_QUOTE:c===9?"FFE6B8B7":(c>=10&&c<=17)?"FFDDEBF7":(c>=SUP0&&c<=lastCol)?C_OTHER:c===7?"FFFDE2E2":"FFF2F2F2";
+      const colFill=c=>c===5?C_RATE:c===8?C_QUOTE:c===9?"FFE6B8B7":(c>=10&&c<=17)?"FFDDEBF7":(c>=SUP0&&c<=lastCol)?"FFFDF5F8":c===7?"FFFDE2E2":"FFF2F2F2";
       for(let rr=5;rr<r;rr++) for(let c=1;c<=lastCol;c++){ const cell=ws.getCell(rr,c); if(cell.fill&&cell.fill.type==="pattern")continue;
         const f=rr===5?C_HEAD:catRows.has(rr)?C_CAT:colFill(c); if(f)cell.fill=fill(f); if(rr===5||catRows.has(rr))cell.border={top:thin,bottom:thin}; }
       // "Subcon / Supplier" heading spans all supplier columns
