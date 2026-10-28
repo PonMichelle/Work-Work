@@ -163,6 +163,9 @@ const orderByField=(list,f,inner)=>{ const first={}, minOrd={}; list.forEach((b,
   const keys=Object.keys(first).sort((a,b)=>a===""?-1:b===""?1:((minOrd[a]??Infinity)-(minOrd[b]??Infinity))||a.localeCompare(b,undefined,{numeric:true}));
   return keys.flatMap(k=>{ const part=list.filter(b=>String(b[f]||"").trim()===k); return inner?inner(part):part; }); };
 const orderBySubcat=list=>orderByField(list,"group");
+// Categories in the order they appear in this project's imported Excel (smallest item.ord), then the rest in list order.
+const excelCatOrder=(cats,items)=>{ const mo={}; items.forEach(b=>{ if(b.ord!=null)mo[b.catId]=Math.min(mo[b.catId]??Infinity,+b.ord); }); const ix=new Map(cats.map((c,i)=>[c.id,i]));
+  return [...cats].sort((a,b)=>((mo[a.id]??Infinity)-(mo[b.id]??Infinity))||(ix.get(a.id)-ix.get(b.id))); };
 // Codes with spaces or "/" (e.g. "cage_2SH/LH 10100") can't be used in formulas, so they get "_" instead; matching treats them as the same.
 const cleanCode=c=>String(c||"").trim().replace(/[\s/]+/g,"_");
 const findBurByCode=(items,code)=>{ const k=cleanCode(code).toLowerCase(); if(!k)return undefined; const lc=s=>cleanCode(s).toLowerCase();
@@ -239,6 +242,8 @@ export default function App(){
   const [burSearch,setBurSearch]=useState(""); const [burSearchCat,setBurSearchCat]=useState(false);
   const [sortBy,setSortBy]=useState("code"); const [sortDir,setSortDir]=useState(1);
   const [burView,setBurView]=useState("tabs"); const [catSort,setCatSort]=useState("none");
+  const [showEmptyCats,setShowEmptyCats]=useState(false);
+  useEffect(()=>{ if(showEmptyCats||!burItems.length||burItems.some(b=>b.catId===selCat))return; const first=excelCatOrder(cats,burItems).find(c=>burItems.some(b=>b.catId===c.id)); if(first)setSelCat(first.id); },[pid,burItems,cats,selCat,showEmptyCats]); // the category list is shared by all projects; by default only show the ones this project uses
   const [selBur,setSelBur]=useState(()=>new Set());
   const [boqMode,setBoqMode]=useState("structured");
   const [burColW,setBurColW]=useState(()=>{try{return JSON.parse(localStorage.getItem("burColW")||"{}")}catch{return{}}});
@@ -539,7 +544,7 @@ export default function App(){
       const codeCount={}; burItems.forEach(b=>{const k=(b.code||"").trim().toLowerCase(); if(k)codeCount[k]=(codeCount[k]||0)+1;});
       // group by category (same order as the sidebar)
       const groups=[]; const known=new Set();
-      const orderedCats=catSort==="none"?cats:[...cats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
+      const orderedCats=catSort==="none"?excelCatOrder(cats,burItems):[...cats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
       for(const cat of orderedCats){ known.add(cat.id); const items=orderBySubcat(burItems.filter(b=>b.catId===cat.id).sort((a,b)=>(a.code||"").localeCompare(b.code||""))); if(items.length)groups.push({name:cat.name,items}); }
       const orphan=orderBySubcat(burItems.filter(b=>!known.has(b.catId)).sort((a,b)=>(a.code||"").localeCompare(b.code||""))); if(orphan.length)groups.push({name:"(Uncategorised)",items:orphan});
       // per category: one column per supplier + date + project/location (case-insensitive). Columns are ordered supplier A–Z,
@@ -861,7 +866,10 @@ export default function App(){
   const vcols=ALL_COLS.filter(c=>visCols.has(c.id));
   const cc=cSum();
   const displayCats=cats;
-  const sidebarCats=catSort==="none"?displayCats:[...displayCats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
+  const catCount={}; burItems.forEach(b=>{ catCount[b.catId]=(catCount[b.catId]||0)+1; });
+  const emptyCatN=displayCats.filter(c=>!catCount[c.id]).length;
+  const sidebarCats0=catSort==="none"?excelCatOrder(displayCats,burItems):[...displayCats].sort((a,b)=>catSort==="az"?String(a.name).localeCompare(String(b.name)):String(b.name).localeCompare(String(a.name)));
+  const sidebarCats=showEmptyCats||!burItems.length?sidebarCats0:sidebarCats0.filter(c=>catCount[c.id]||c.id===selCat);
   const catName=id=>displayCats.find(c=>c.id===id)?.name||id;
   const BUR_MAX=300; const _q=burSearch.trim().toLowerCase();
   // When searching, look across the WHOLE BUR library (unless "Only in this category" is ticked); otherwise show the selected category.
@@ -1306,6 +1314,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                   <button onClick={()=>setCatSort(s=>s==="za"?"none":"za")} title="Sort Z → A" style={{border:"none",borderRadius:5,padding:"2px 6px",fontSize:10,fontWeight:700,cursor:"pointer",background:catSort==="za"?"#7c3aed":"#f1f5f9",color:catSort==="za"?"#fff":"#64748b"}}>Z↓A</button>
                 </div>
               </div>
+              {emptyCatN>0&&burItems.length>0&&<button onClick={()=>setShowEmptyCats(v=>!v)} title="Categories are shared by all projects; most are empty in this one" style={{width:"100%",border:"none",background:"none",textAlign:"left",fontSize:10,color:"#7c3aed",cursor:"pointer",padding:"0 6px 6px",fontWeight:600}}>{showEmptyCats?"▴ Hide empty categories":`▾ Show ${emptyCatN} empty categor${emptyCatN>1?"ies":"y"}`}</button>}
               {sidebarCats.map(c=>{const n=burItems.filter(b=>b.catId===c.id).length; const sel=selCat===c.id; return(
                 <div key={c.id} onDragOver={e=>{e.preventDefault();e.currentTarget.style.outline="2px dashed #7c3aed";}} onDragLeave={e=>{e.currentTarget.style.outline="none";}} onDrop={e=>{e.currentTarget.style.outline="none";handleDropCat(c.id,e);}} style={{display:"flex",alignItems:"center",gap:2,marginBottom:2,borderRadius:8,background:sel?"#7c3aed":"transparent"}}>
                   <button onClick={()=>setSelCat(c.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,flex:1,minWidth:0,textAlign:"left",padding:"7px 10px",borderRadius:8,fontSize:12,fontWeight:600,border:"none",cursor:"pointer",background:"transparent",color:sel?"#fff":"#475569"}}>
