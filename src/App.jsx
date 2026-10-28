@@ -96,33 +96,64 @@ const unitTag=u=>String(u||"").trim().replace(/²/g,"2").replace(/³/g,"3").repl
 const codeBase=(code,unit)=>{ const c=String(code||"").trim(), t=unitTag(unit); return t&&c.toLowerCase().endsWith("_"+t.toLowerCase())?c.slice(0,-(t.length+1)):c; };
 const codeWithUnit=(code,unit)=>{ const c=String(code||"").trim(), t=unitTag(unit); if(!c||!t)return c; return c.toLowerCase().endsWith("_"+t.toLowerCase())?c:`${c}_${t}`; };
 const swapUnitTag=(code,oldU,newU)=>String(code||"").trim()?codeWithUnit(codeBase(code,oldU),newU):code;
-// Read a master BUR workbook (layout of BUR.xlsx): orange cells in column A start a category (a plain column-A heading also
-// starts one when it matches an existing category name); every row with a Code in D is an item: B desc, C unit, D code, E rate.
-// Supplier names sit in R onwards on heading rows (e.g. "AID\n(SLA Sep 26)"); numbers under them on item rows become quotes.
+// Read a BUR workbook. The layout is detected from the header row ("Unit", "Code", "Rate"): description is the column left of Unit,
+// supplier columns start at the "Subcon / Supplier" heading (or just after the last heading). Works for the master BUR.xlsx
+// (B desc · C unit · D code · E rate · suppliers from R) and the HDB layout (C desc · D unit · E code · F rate · suppliers from V).
+// • Category: column-A text (orange, underlined, or an existing category name) on a row without a code.
+// • Sub-category: description-column text without a code — orange-filled headings if the sheet uses them, otherwise underlined ones.
+// • Supplier names sit on heading rows; a name covers its own column and the blank columns to its right. A row right under the
+//   names giving "Project (… DU) Mon YY" per column sets each column's project + date. Numbers under them on item rows are quotes.
 const parseBurWorkbook=(wb,catNames=[])=>{
   const ws=wb.worksheets[0]; const known=new Set(catNames.map(n=>String(n).trim().toLowerCase()));
   const val=c=>{ const v=c.value; if(v&&typeof v==="object"){ if("result" in v)return v.result; if(v.richText)return v.richText.map(t=>t.text).join(""); if(v.text!=null)return v.text; return undefined; } return v; };
   const str=c=>{ const v=val(c); return v==null?"":String(v).trim(); };
-  const SUP0=18, SUPN=28; let cat="(Uncategorised)", hdr={}, sub=""; const items=[];
-  const DATE_TAG=/\((SLA|PS|CAG|WAS|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i;
-  for(let r=1;r<=ws.rowCount;r++){
-    const A=str(ws.getCell(r,1)),B=str(ws.getCell(r,2)); let D=str(ws.getCell(r,4));
+  const argb=c=>(c.fill?.fgColor?.argb||"").toUpperCase(), ORANGE="FFFFC000";
+  const underlined=c=>{ const rt=c.value&&c.value.richText; return !!(c.font?.underline||(rt&&rt.some(t=>t.font&&t.font.underline))); };
+  // ── layout from the header row
+  let hdrRow=0, descC=2, unitC=3, codeC=4, rateC=5, SUP0=18;
+  for(let r=1;r<=15&&!hdrRow;r++){ const cells={}; let last=0, supAt=0;
+    ws.getRow(r).eachCell({includeEmpty:false},(c,n)=>{ const t=str(c).toLowerCase(); if(!t)return; last=Math.max(last,n); if(!(t in cells))cells[t]=n; if(!supAt&&/subcon|supplier/.test(t))supAt=n; });
+    if(cells.unit&&cells.code&&cells.rate){ hdrRow=r; unitC=cells.unit; codeC=cells.code; rateC=cells.rate; descC=unitC-1; SUP0=supAt||last+1; } }
+  // right edge of the supplier area = furthest supplier name/project on a category row (or the row under it); calc columns further right are ignored
+  let SUPN=SUP0+10; for(let r=(hdrRow||0)+1;r<=ws.rowCount;r++){ if(!str(ws.getCell(r,1))||str(ws.getCell(r,codeC)))continue;
+    for(const rr of [r,r+1]) ws.getRow(rr).eachCell({includeEmpty:false},(c,n)=>{ if(n>SUPN&&typeof val(c)==="string"&&val(c).trim())SUPN=n; }); }
+  const HAS_MON=/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*'?\d{2,4}(?!\d)/i, NOTE=/\$|\d\s*(mm|m2|m3|kg|pcs)\b|^[\d.]+$/i;
+  const DATE_TAG=/\((SLA|PS|CAG|WAS|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i, MON=/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*'?\d{2,4}(?!\d)/ig;
+  // "BH - Keppel (1080 DU) Feb 26" -> project "BH - Keppel (1080 DU)", date "Feb 26"
+  const splitDetail=t=>{ const one=String(t).replace(/\s*\r?\n\s*/g," ").trim(); const ms=[...one.matchAll(MON)]; if(!ms.length)return {loc:one,date:""}; const m=ms[ms.length-1];
+    return {date:m[0].trim(), loc:(one.slice(0,m.index)+one.slice(m.index+m[0].length)).replace(/[\s\/,-]+$/,"").replace(/^[\s\/,-]+/,"").trim()}; };
+  // orange sub-headings in the description column? then only those count as sub-categories (underlined lines there are just notes)
+  let orangeSubs=0; for(let r=(hdrRow||1)+1;r<=ws.rowCount&&orangeSubs<3;r++){ const c=ws.getCell(r,descC); if(str(c)&&!str(ws.getCell(r,codeC))&&argb(c)===ORANGE)orangeSubs++; }
+  let cat="(Uncategorised)", hdr={}, sub="", namesRow=0, names={}; const items=[];
+  for(let r=(hdrRow||0)+1;r<=ws.rowCount;r++){
+    const aC=ws.getCell(r,1), A=str(aC), dC=ws.getCell(r,descC), B=str(dC); let D=str(ws.getCell(r,codeC));
     if(r<6&&/^description$/i.test(A))continue;
-    const orange=(ws.getCell(r,1).fill?.fgColor?.argb||"").toUpperCase()==="FFFFC000";
-    if(orange&&A)D=""; // an orange category heading is never an item, even with text (e.g. "Mortar") in the Code column
-    if(!D&&A&&(orange||(!B&&known.has(A.toLowerCase())))){ cat=A; hdr={}; sub=""; }
-    if(!D&&B){ const bc=ws.getCell(r,2), rt=bc.value&&bc.value.richText; if(bc.font?.underline||(rt&&rt.some(t=>t.font&&t.font.underline))) sub=B.replace(/\s+/g," ").replace(/[-:]+$/,"").trim(); }
+    const orange=argb(aC)===ORANGE;
+    if(orange&&A&&descC!==1)D=""; // an orange category heading is never an item, even with text (e.g. "Mortar") in the Code column
+    if(!D&&A&&descC!==1&&(orange||underlined(aC)||(!B&&known.has(A.toLowerCase())))){ cat=A; hdr={}; sub=""; namesRow=0; names={}; }
+    if(!D&&B&&(orangeSubs>=3?argb(dC)===ORANGE:underlined(dC))) sub=B.replace(/\s+/g," ").replace(/[-:]+$/,"").trim();
     if(!D){
-      // supplier-name row: a category row, 2+ names, or a single pale-yellow / date-tagged name. Lone notes (sizes, remarks) are ignored.
-      const texts=[]; for(let c=SUP0;c<=SUPN;c++){ const cell=ws.getCell(r,c), v=val(cell); if(typeof v==="string"&&v.trim())texts.push({c,v:v.trim(),yellow:(cell.fill?.fgColor?.argb||"").toUpperCase()==="FFFFFFCC"}); }
+      // supplier heading rows: a category row, 2+ names, or a single pale-yellow / date-tagged name. Lone notes (sizes, remarks) are ignored.
+      const texts=[]; for(let c=SUP0;c<=SUPN;c++){ const cell=ws.getCell(r,c), v=val(cell); if(typeof v==="string"&&v.trim())texts.push({c,v:v.trim(),yellow:argb(cell)==="FFFFFFCC"}); }
       const isHdr=cat===A||texts.length>=2||texts.some(t=>t.yellow||DATE_TAG.test(t.v));
-      if(isHdr) texts.forEach(t=>{ const one=t.v.replace(/\s*\r?\n\s*/g," "); const m=/^(.*?)\s*\(([^)]*)\)?\s*$/.exec(one); hdr[t.c]=m&&m[1]?{supplier:m[1].trim(),date:m[2].trim()}:{supplier:one,date:""}; });
+      if(isHdr&&texts.length){
+        // a project/date row (right under the names, or mostly "… Mon YY" texts later in the block): each column = name to its left + this project/date
+        const mostlyDates=Object.keys(names).length>0&&texts.filter(t=>HAS_MON.test(t.v)&&!/\)\s*$/.test(t.v)).length>=Math.max(1,Math.ceil(texts.length*0.6));
+        if((namesRow&&namesRow===r-1)||mostlyDates){
+          texts.forEach(t=>{ let c=t.c; while(c>=SUP0&&!names[c])c--; const d=splitDetail(t.v); hdr[t.c]={supplier:c>=SUP0?names[c]:"",date:d.date,location:d.loc}; });
+          Object.keys(hdr).forEach(c=>{ if(!hdr[c].supplier)delete hdr[c]; }); namesRow=0;
+        }else{ names={};
+          texts.forEach(t=>{ if(NOTE.test(t.v))return; // sizes / prices written in the heading area are not supplier names
+            const one=t.v.replace(/\s*\r?\n\s*/g," "); const m=/^(.*?)\s*\(([^)]*)\)?\s*$/.exec(one); const h=m&&m[1]?{supplier:m[1].trim(),date:m[2].trim(),location:""}:{supplier:one,date:"",location:""}; hdr[t.c]=h; names[t.c]=h.supplier; });
+          namesRow=r; }
+      }
       continue;
     }
+    namesRow=0;
     const num=c=>{ const v=val(ws.getCell(r,c)); return typeof v==="number"&&isFinite(v)?v:null; };
-    const rate=num(5)??num(6)??0;
-    const quotes=[]; for(let c=SUP0;c<=SUPN;c++){ const q=num(c); if(q!=null&&q!==0&&hdr[c])quotes.push({supplier:hdr[c].supplier,date:hdr[c].date,rate:Math.round(q*100)/100}); }
-    items.push({cat,group:sub,ord:r,code:D,desc:B||D,unit:str(ws.getCell(r,3))||"sum",rate:Math.round(rate*100)/100,quotes});
+    const rate=num(rateC)??num(rateC+1)??0;
+    const quotes=[]; for(let c=SUP0;c<=SUPN;c++){ const q=num(c); if(q!=null&&q!==0&&hdr[c])quotes.push({supplier:hdr[c].supplier,date:hdr[c].date,location:hdr[c].location||"",rate:Math.round(q*100)/100}); }
+    items.push({cat,group:sub,ord:r,code:D,desc:B||D,unit:str(ws.getCell(r,unitC))||"sum",rate:Math.round(rate*100)/100,quotes});
   }
   return items;
 };
@@ -982,7 +1013,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
       for(let i=0;i<old.length;i+=400){ const batch=writeBatch(db); old.slice(i,i+400).forEach(b=>batch.delete(doc(db,"bur",b.id))); await batch.commit(); }
       toast_(`⏳ Adding ${parsed.length} items…`);
       for(let i=0;i<parsed.length;i+=400){ const batch=writeBatch(db); parsed.slice(i,i+400).forEach(p=>batch.set(doc(collection(db,"bur")),{pid,catId:catId(p.cat),code:codeWithUnit(p.code,p.unit),desc:p.desc,unit:p.unit,labour:0,material:p.rate,plant:0,subcon:0,oh:0,profit:0,
-        costData:p.quotes.map(q=>({id:uid(),component:"subcon",supplier:q.supplier,rate:q.rate,date:q.date,location:"",note:"",imgs:[]})),quote:null,group:p.group||"",ord:p.ord})); await batch.commit(); }
+        costData:p.quotes.map(q=>({id:uid(),component:"subcon",supplier:q.supplier,rate:q.rate,date:q.date,location:q.location||"",note:"",imgs:[]})),quote:null,group:p.group||"",ord:p.ord})); await batch.commit(); }
       setSelCat(catId(parsed[0].cat));
       toast_(`✅ BUR replaced: ${parsed.length} items from ${file.name}`);
     }catch(e){ toast_("⚠️ Replace failed: "+(e&&e.message||e)); }
