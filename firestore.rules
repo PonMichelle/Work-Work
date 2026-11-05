@@ -1,9 +1,11 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Only signed-in users (accounts created by the admin) can read/write.
+    // Private app: only Michelle's own sign-ins can read or write anything.
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email.lower() in ['michellepon@weehur.com.sg', 'ponmichelle@gmail.com'];
     }
   }
 }
