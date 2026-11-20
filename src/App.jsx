@@ -3,7 +3,6 @@ import { auth, db } from "./firebase";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch, getDoc, getDocs, query, where } from "firebase/firestore";
 // NOTE: BUR items are scoped per project via a `pid` field.
-import burSeed from "./burSeed.json"; // master BUR list imported from BUR.xlsx
 import SheetGrid from "./SheetGrid.jsx";
 
 const SECTIONS=[{id:"prelim",name:"Preliminaries"},{id:"building",name:"Building Works"},{id:"external",name:"External Works"},{id:"mande",name:"M&E Works"},{id:"fees",name:"Professional Fees"}];
@@ -260,6 +259,8 @@ export default function App(){
   const [rbu,setRbu]=useState({labour:"",material:"",plant:"",subcon:"",oh:15,profit:10});
   const [log,setLog]=useState([]);
   const [toast,setToast]=useState(null);
+  const [defTpl,setDefTpl]=useState(null); // Master BQ template shared by all projects (database doc meta/bqTemplateDefault)
+  const [accessDenied,setAccessDenied]=useState(false); // signed in, but the database refuses this account
   const [bqTplB64,setBqTplB64]=useState(null); const [bqTplName,setBqTplName]=useState(""); const [bqResult,setBqResult]=useState(null);
 
   const [comparisons,setComparisons]=useState([]);
@@ -285,7 +286,7 @@ export default function App(){
   useEffect(()=>onAuthStateChanged(auth,u=>setAuthUser(u||null)),[]);
   useEffect(()=>{
     if(!authUser){setProfile(null);return;}
-    return onSnapshot(doc(db,"users",authUser.uid),s=>setProfile(s.exists()?s.data():null),()=>setProfile(null));
+    setAccessDenied(false); return onSnapshot(doc(db,"users",authUser.uid),s=>{ setAccessDenied(false); setProfile(s.exists()?s.data():null); },e=>{ setProfile(null); if(e&&e.code==="permission-denied")setAccessDenied(true); });
   },[authUser]);
 
   const doLogin=async()=>{
@@ -330,6 +331,7 @@ export default function App(){
   // Keep the selected category valid when the category list changes (e.g. after loading the master list).
   useEffect(()=>{ if(cats.length&&!cats.some(c=>c.id===selCat))setSelCat(cats[0].id); },[cats]); // eslint-disable-line
   // Per-project master BQ template override (uploaded). Falls back to the bundled CAG template.
+  useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","bqTemplateDefault"),s=>setDefTpl(s.exists()?s.data():null),()=>setDefTpl(null)); },[ready]);
   useEffect(()=>{ if(!ready||!pid){setBqTplB64(null);setBqTplName("");return;} return onSnapshot(doc(db,"boqtemplate",pid),s=>{ if(s.exists()){setBqTplB64(s.data().b64||null);setBqTplName(s.data().name||"");}else{setBqTplB64(null);setBqTplName("");} }); },[ready,pid]);
   useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","log"),s=>{ const e=s.exists()?(s.data().entries||[]):[]; logRef.current=e; setLog(e); }); },[ready]);
   useEffect(()=>{ if(!ready)return; return onSnapshot(doc(db,"meta","ccomps"),s=>setCcomps(s.exists()?(s.data().list||[]):[])); },[ready]);
@@ -457,7 +459,8 @@ export default function App(){
       const ExcelJS=(await import("exceljs")).default;
       let buf, tplName="CAG_Dormitory_Master_BQ.xlsx";
       if(bqTplB64){ buf=Uint8Array.from(atob(bqTplB64),c=>c.charCodeAt(0)); tplName=bqTplName||tplName; }
-      else { const res=await fetch(import.meta.env.BASE_URL+"boq-template.xlsx"); if(!res.ok)throw new Error("template file not found"); buf=await res.arrayBuffer(); }
+      else if(defTpl&&defTpl.b64){ buf=Uint8Array.from(atob(defTpl.b64),c=>c.charCodeAt(0)); tplName=defTpl.name||tplName; }
+      else throw new Error('no Master BQ template saved yet — click "Update template…" and choose your Master BQ .xlsx (only needed once)');
       const wb=new ExcelJS.Workbook(); await wb.xlsx.load(buf);
       const codeMap={}; for(const b of burItems){ const k=(b.code||"").trim().toLowerCase(); if(k&&!codeMap[k])codeMap[k]=b; }
       // also match template codes written without (or with) the _unit suffix
@@ -488,10 +491,10 @@ export default function App(){
       setBqResult({filled,scanned,unmatched:[...unmatched].sort(),tpl:tplName});
       toast_(`✅ Exported — ${filled} of ${scanned} rate rows filled`);
     }catch(e){ toast_("⚠️ Export failed: "+(e&&e.message||e)); }
-  },[burItems,bqTplB64,bqTplName,toast_]);
+  },[burItems,bqTplB64,bqTplName,defTpl,toast_]);
   const onTemplateFile=useCallback(async file=>{
     if(!file)return; if(!/\.xlsx$/i.test(file.name)){toast_("⚠️ Use a .xlsx file");return;}
-    try{ const bytes=new Uint8Array(await file.arrayBuffer()); let bin=""; const CH=0x8000; for(let i=0;i<bytes.length;i+=CH)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CH)); const b=btoa(bin); if(b.length>980000){toast_("⚠️ Template too large (keep under ~700 KB)");return;} await setDoc(doc(db,"boqtemplate",pid),{b64:b,name:file.name}); toast_("✅ Template updated to "+file.name); }
+    try{ const bytes=new Uint8Array(await file.arrayBuffer()); let bin=""; const CH=0x8000; for(let i=0;i<bytes.length;i+=CH)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CH)); const b=btoa(bin); if(b.length>980000){toast_("⚠️ Template too large (keep under ~700 KB)");return;} await setDoc(doc(db,"boqtemplate",pid),{b64:b,name:file.name}); const d0=await getDoc(doc(db,"meta","bqTemplateDefault")); if(!d0.exists())await setDoc(doc(db,"meta","bqTemplateDefault"),{b64:b,name:file.name}); toast_("✅ Template updated to "+file.name); }
     catch(e){ toast_("⚠️ "+e.message); }
   },[db,pid,toast_]);
 
@@ -695,21 +698,6 @@ export default function App(){
   const delBur=useCallback(id=>{ if(!confirm("Delete this BUR item?"))return; const b=burItemsRef.current.find(x=>x.id===id); if(b){ const {id:_i,...data}=b; pushUndo({kind:"deleted",label:"Delete "+(b.code||b.desc||"item"),docs:[{id,data}]}); } deleteDoc(doc(db,"bur",id)).catch(()=>{}); },[pushUndo]);
   const setBurField=(id,patch)=>{ recordFields([id],Object.keys(patch),"Edit "+burLabel(id)); setBurItems(prev=>prev.map(b=>b.id===id?{...b,...patch}:b)); updateDoc(doc(db,"bur",id),patch).catch(()=>{}); };
 
-  const loadMaster=useCallback(async()=>{
-    if(!confirm(`Replace the entire BUR library with the master list?\n\nThis clears the current ${burItems.length} item(s) and loads ${burSeed.items.length} fresh items filed under their ${burSeed.cats.length} categories (from the Excel). Use this to reset / remove duplicates.`))return;
-    toast_("⏳ Loading master list (replacing all)…");
-    try{
-      // 1) clear existing BUR docs (fixes duplicates)
-      for(let i=0;i<burItems.length;i+=400){ const batch=writeBatch(db); burItems.slice(i,i+400).forEach(b=>batch.delete(doc(db,"bur",b.id))); await batch.commit(); }
-      // 2) set categories from the Excel (column A)
-      await setDoc(doc(db,"meta","cats"),{list:burSeed.cats});
-      // 3) write the items (scoped to this project)
-      for(let i=0;i<burSeed.items.length;i+=400){ const batch=writeBatch(db); burSeed.items.slice(i,i+400).forEach(it=>{ const {id,...rest}=it; batch.set(doc(collection(db,"bur")),{...rest,pid}); }); await batch.commit(); }
-      if(burSeed.cats[0])setSelCat(burSeed.cats[0].id);
-      addLogEntry(`Loaded master list: ${burSeed.items.length} items in ${burSeed.cats.length} categories`);
-      toast_(`✅ Loaded ${burSeed.items.length} items into ${burSeed.cats.length} categories`);
-    }catch(e){ toast_("⚠️ Load failed: "+e.message); }
-  },[burItems,toast_,addLogEntry,pid]);
 
   // Auto-sort BUR items into the standard categories by keyword; unmatched → Others. User can move any item after.
   const categorizeMaster=useCallback(async()=>{
@@ -830,6 +818,15 @@ export default function App(){
     </div>
   );
 
+  if(accessDenied)return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0f172a",fontFamily:"system-ui,sans-serif",padding:16}}>
+      <div style={{background:"#fff",borderRadius:14,padding:28,maxWidth:380,width:"100%",textAlign:"center"}}>
+        <div style={{fontSize:30,marginBottom:6}}>🔒</div>
+        <div style={{fontWeight:800,fontSize:17,color:"#1e293b",marginBottom:6}}>No access</div>
+        <div style={{fontSize:13,color:"#64748b",marginBottom:16}}>This account ({authUser.email||"unknown"}) is not allowed to use QS Workspace.</div>
+        <button onClick={()=>signOut(auth)} style={{background:"#1e3a5f",color:"#fff",border:"none",borderRadius:8,padding:"9px 18px",fontSize:13,fontWeight:700,cursor:"pointer"}}>Sign out</button>
+      </div>
+    </div>);
   if(!profile)return(
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4f46e5 0%,#9333ea 45%,#ec4899 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:"system-ui,sans-serif"}}>
       <div style={{background:"#fff",borderRadius:20,padding:32,width:"100%",maxWidth:360,boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>

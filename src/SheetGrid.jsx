@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { doc, onSnapshot, setDoc } from "firebase/firestore";
+import { doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
 
 const argbToCss=argb=>{ if(!argb)return null; const s=String(argb); if(s.length===8)return "#"+s.slice(2); if(s.length===6)return "#"+s; return null; };
 const colLetter=n=>{ let s=""; while(n>0){const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26);} return s; };
@@ -96,7 +96,8 @@ export default function SheetGrid({ db, pid, toast, baseUrl, burLookup, onToStru
   const loadBytes=useCallback(async(buf,name)=>{ const b=bufToB64(buf); if(b.length>980000){toast("⚠️ File too large (keep .xlsx under ~700 KB)");return;} try{ await setDoc(doc(db,"boqfile",pid),{b64:b,name:name||"sheet.xlsx"}); await setDoc(doc(db,"boqedits",pid),{cells:{},colW:{},rowH:{},active:0}); toast("✅ Loaded "+(name||"workbook")); }catch(e){toast("⚠️ Save failed: "+e.message);} },[db,pid,toast]);
   const onFile=async file=>{ if(!file)return; if(!/\.xlsx$/i.test(file.name)){toast("⚠️ Please use a .xlsx file");return;} setBusy(true); try{await loadBytes(await file.arrayBuffer(),file.name);}finally{setBusy(false);} };
   const onDrop=e=>{ e.preventDefault(); const f=e.dataTransfer.files&&e.dataTransfer.files[0]; if(f)onFile(f); };
-  const useTemplate=async()=>{ setBusy(true); try{ const r=await fetch(baseUrl+"boq-template.xlsx"); await loadBytes(await r.arrayBuffer(),"CAG_Dormitory_Master_BQ.xlsx"); }catch(e){toast("⚠️ "+e.message);} finally{setBusy(false);} };
+  // the Master BQ template is kept in the database (behind the login), saved once via "Update template…" in Structured BOQ
+  const useTemplate=async()=>{ setBusy(true); try{ const t=await getDoc(doc(db,"meta","bqTemplateDefault")); if(!t.exists())throw new Error('No Master BQ template saved yet — in Structured BOQ click "Update template…" and choose it once'); await loadBytes(b64ToBytes(t.data().b64).buffer,t.data().name||"Master_BQ.xlsx"); }catch(e){toast("⚠️ "+e.message);} finally{setBusy(false);} };
 
   const exportXlsx=useCallback(async()=>{
     if(!b64){toast("Nothing to export");return;} setBusy(true);
