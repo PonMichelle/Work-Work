@@ -6,7 +6,7 @@ import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch, 
 import SheetGrid from "./SheetGrid.jsx";
 
 const SECTIONS=[{id:"prelim",name:"Preliminaries"},{id:"building",name:"Building Works"},{id:"external",name:"External Works"},{id:"mande",name:"M&E Works"},{id:"fees",name:"Professional Fees"}];
-const UNITS=["m²","m³","m","no.","sum","lot","kg","t","m run","%","item"]
+const UNITS=["m²","m³","m","no.","sum","lot","kg","t","m run","%","item","day","week","month"]
 // Dropdown options for a unit box: always include the item's own unit (e.g. "m2" or "nr" from older data) so the box shows what is really stored.
 const unitOpts=cur=>!cur||UNITS.includes(cur)?UNITS:[cur,...UNITS];
 const STATUSES=["Draft","Under Review","Confirmed"];
