@@ -235,6 +235,7 @@ export default function App(){
   const [burItems,setBurItems]=useState([]);
   const [selCat,setSelCat]=useState(DEF_CATS[0].id);
   const [expBur,setExpBur]=useState(null);
+  const [quoteClip,setQuoteClip]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("burQuoteClip")||"null"); }catch{ return null; } }); // copied Cost Data row
   const [editExpr,setEditExpr]=useState(null); // id of the rate / amount box being typed in
   const [syncState,setSyncState]=useState(null); // "Sync from project" window: {src, loading, rows:[{key,kind,cur,src,diffs}], sel:Set, opts}
   const [collapsedSubs,setCollapsedSubs]=useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("burCollapsedSubs")||"[]")); }catch{ return new Set(); } }); // "catId|sub-category" keys folded in the BUR table
@@ -767,6 +768,20 @@ export default function App(){
   const toggleInRate=eid=>{ const b=burItemsRef.current.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).map(e=>e.id===eid?{...e,inRate:!e.inRate}:e); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); };
   const allComps=[...COMPS,...ccomps.map(c=>c.key)];
 
+  // ── copy / paste a Cost Data row ────────────────────────────────────────────
+  const copyQuote=(e,label)=>{ const c={component:e.component||cType,supplier:e.supplier||"",rate:+e.rate||0,expr:e.expr||"",date:e.date||"",location:e.location||"",note:e.note||"",per:e.per||"",cover:e.cover??""};
+    setQuoteClip(c); try{ localStorage.setItem("burQuoteClip",JSON.stringify(c)); }catch{} toast_(`⧉ Copied ${label||c.supplier} — open another item's Cost Data and click 📋 Paste, or tick items and use "Paste quote"`); };
+  const pasteQuoteToForm=()=>{ const c=quoteClip; if(!c)return; if(c.component&&c.component!==cType)setCType(c.component);
+    setCForm(f=>({...f,supplier:c.supplier,rate:c.expr||String(c.rate??""),date:c.date,location:c.location,note:c.note})); toast_("📋 Pasted — check the details, then Add Entry"); };
+  const pasteQuoteToItems=async()=>{ const c=quoteClip, ids=[...selBur]; if(!c||!ids.length)return;
+    if(!confirm(`Add this quote to ${ids.length} item(s)?\n\n${c.supplier} · S$ ${c.expr||c.rate}${c.date?" · "+c.date:""}${c.location?" · "+c.location:""}\n\nIt is added as a new Cost Data row (not ticked into the rate). You can Undo.`))return;
+    recordFields(ids,["costData"],`Paste quote to ${ids.length} item(s)`);
+    try{ for(let i=0;i<ids.length;i+=400){ const batch=writeBatch(db);
+        ids.slice(i,i+400).forEach(id=>{ const b=burItemsRef.current.find(x=>x.id===id); if(!b)return; const n=c.expr?calcExpr(c.expr):+c.rate;
+          const row={id:uid(),component:c.component||"subcon",supplier:c.supplier,rate:isFinite(n)?Math.round(n*10000)/10000:(+c.rate||0),...(c.expr?{expr:c.expr}:{}),date:c.date,location:c.location,note:c.note,...(c.per?{per:c.per,cover:c.cover}:{}),imgs:[]};
+          batch.update(doc(db,"bur",id),{costData:[...(b.costData||[]),row]}); });
+        await batch.commit(); }
+      toast_(`📋 Quote added to ${ids.length} item(s)`); clearSel(); }catch(e){ toast_("⚠️ "+e.message); } };
   const addCostEntry=useCallback(()=>{ if(!cForm.supplier||!String(cForm.rate).trim()){toast_("⚠️ Enter supplier and rate");return;} const rv=calcExpr(cForm.rate); if(!isFinite(rv)){toast_("⚠️ Rate formula has a mistake — check brackets / symbols");return;} const rExpr=(/[-+*/()]/.test(String(cForm.rate).replace(/^\s*[=-]/,""))||exprRefs(cForm.rate).length>0)?String(cForm.rate).trim():""; const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=[...(b.costData||[]),{id:uid(),component:cType,supplier:cForm.supplier,rate:Math.round(rv*10000)/10000,...(rExpr?{expr:rExpr}:{}),date:cForm.date,location:cForm.location||"",note:cForm.note,imgs:cForm.imgs||[]}]; setBurField(costModal,{costData:cd}); setCForm({supplier:"",rate:"",date:"",location:"",note:"",imgs:[]}); toast_("✅ Entry added"); },[cType,cForm,costModal,burItems,toast_]);
   const pickCostImg=useCallback(async files=>{ const list=files&&files.length!=null?[...files]:(files?[files]:[]); if(!list.length)return; const out=[]; for(const file of list){ const d=await imgToDataURL(file); if(d&&d.length<=1400000)out.push(d); else if(d)toast_("⚠️ One image too large, skipped"); } if(out.length)setCForm(f=>({...f,imgs:[...(f.imgs||[]),...out]})); },[toast_]);
   const delCostEntry=useCallback(eid=>{ const b=burItems.find(x=>x.id===costModal); if(!b)return; const cd=(b.costData||[]).filter(e=>e.id!==eid); setBurField(costModal,{costData:cd,...tickPatch(b,cd)}); },[costModal,burItems,ccomps]);
@@ -1366,6 +1381,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetDiscount(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Discount…</option>{[2,5,10,15].map(m=><option key={m} value={m}>{m}%</option>)}<option value="__custom">Other %…</option><option value="0">None (0%)</option></select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetWaste(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Waste/ OH…</option>{[5,10,15,20].map(m=><option key={m} value={m}>{m}%</option>)}<option value="__custom">Other %…</option><option value="0">None (0%)</option></select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetRound(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Round up…</option>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
+                {quoteClip&&<button onClick={pasteQuoteToItems} title={"Add the copied quote row to every ticked item: "+[quoteClip.supplier,quoteClip.expr||quoteClip.rate,quoteClip.date,quoteClip.location].filter(Boolean).join(" · ")} style={{background:"#0e7490",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>📋 Paste quote to {selBur.size}</button>}
                 <button onClick={()=>copyItems([...selBur])} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>⧉ Copy {selBur.size}</button>
                 <button onClick={bulkDelete} style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>🗑 Delete {selBur.size}</button>
                 <button onClick={clearSel} style={{marginLeft:"auto",background:"#fff",border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#5b21b6",fontWeight:600}}>Clear</button>
@@ -1874,7 +1890,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                         <td style={{padding:"10px 8px"}}>
                           <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
                             {cType==="subcon"&&<button onClick={()=>useCostEntry(e)} style={{background:"#f59e0b",color:"#fff",border:"none",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:700,whiteSpace:"nowrap"}}>→ Use as Quote</button>}
-                            <button onClick={()=>delCostEntry(e.id)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700,padding:"2px 4px"}}>✕</button>
+                            <button onClick={()=>copyQuote(e)} title="Copy this row to paste into other items" style={{background:"none",border:"none",color:"#2563eb",cursor:"pointer",fontSize:13,fontWeight:700,padding:"2px 4px"}}>⧉</button><button onClick={()=>delCostEntry(e.id)} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:13,fontWeight:700,padding:"2px 4px"}}>✕</button>
                           </div>
                         </td>
                       </tr>
@@ -1897,6 +1913,8 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                   {(cForm.imgs||[]).map((p,i)=><span key={i} style={{display:"inline-flex",alignItems:"center",gap:3}}><img src={p} alt="" style={{height:38,width:50,objectFit:"cover",borderRadius:4,border:"1px solid #e2e8f0"}}/><button onClick={()=>setCForm(f=>({...f,imgs:f.imgs.filter((_,j)=>j!==i)}))} style={{border:"none",background:"none",color:"#ef4444",cursor:"pointer",fontSize:12,fontWeight:700}}>✕</button></span>)}
                 </div>
                 <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                  {quoteClip&&<button onClick={pasteQuoteToForm} title={"Paste: "+[quoteClip.supplier,quoteClip.expr||quoteClip.rate,quoteClip.date,quoteClip.location].filter(Boolean).join(" · ")} style={{marginRight:"auto",background:"#ecfeff",border:"1px solid #67e8f9",borderRadius:7,padding:"7px 12px",fontSize:12,cursor:"pointer",color:"#0e7490",fontWeight:600,maxWidth:340,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📋 Paste {quoteClip.supplier} · {quoteClip.expr||quoteClip.rate}{quoteClip.date?" · "+quoteClip.date:""}{quoteClip.location?" · "+quoteClip.location:""}</button>}
+                  <button onClick={()=>{ if(!cForm.supplier&&!String(cForm.rate).trim()){toast_("Nothing typed to copy yet");return;} const n=calcExpr(cForm.rate); copyQuote({component:cType,supplier:cForm.supplier,rate:isFinite(n)?n:0,expr:/[-+*/()A-Za-z]/.test(String(cForm.rate).replace(/^\s*[=-]/,""))?String(cForm.rate).trim():"",date:cForm.date,location:cForm.location,note:cForm.note}); }} title="Copy what is typed in this form" style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"7px 12px",fontSize:12,cursor:"pointer",color:"#2563eb",fontWeight:600}}>⧉ Copy row</button>
                   <button onClick={()=>setCForm({supplier:"",rate:"",date:"",location:"",note:"",imgs:[]})} style={{background:"#f1f5f9",border:"none",borderRadius:7,padding:"7px 14px",fontSize:12,cursor:"pointer",color:"#64748b"}}>Clear</button>
                   <button onClick={addCostEntry} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontSize:12,cursor:"pointer",fontWeight:600}}>Add Entry</button>
                 </div>
