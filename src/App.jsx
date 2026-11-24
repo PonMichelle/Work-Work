@@ -685,6 +685,7 @@ export default function App(){
         for(let i=0;i<e.docs.length;i+=400){ const batch=writeBatch(db); e.docs.slice(i,i+400).forEach(({id,data})=>batch.set(doc(db,"bur",id),data)); await batch.commit(); }
       }else if(e.kind==="multi"){
         for(const part of e.parts){ if(part.kind==="fields"){ setBurItems(prev=>prev.map(b=>{ const it=part.items.find(x=>x.id===b.id); return it?{...b,...it.before}:b; })); for(let i=0;i<part.items.length;i+=400){ const batch=writeBatch(db); part.items.slice(i,i+400).forEach(({id,before})=>batch.update(doc(db,"bur",id),before)); await batch.commit(); } }
+          else if(part.kind==="restore"){ for(let i=0;i<part.docs.length;i+=400){ const batch=writeBatch(db); part.docs.slice(i,i+400).forEach(({id,data})=>batch.set(doc(db,"bur",id),data)); await batch.commit(); } }
           else if(part.kind==="created"){ for(let i=0;i<part.ids.length;i+=400){ const batch=writeBatch(db); part.ids.slice(i,i+400).forEach(id=>batch.delete(doc(db,"bur",id))); await batch.commit(); } } }
       }else if(e.kind==="created"){
         for(let i=0;i<e.ids.length;i+=400){ const batch=writeBatch(db); e.ids.slice(i,i+400).forEach(id=>batch.delete(doc(db,"bur",id))); await batch.commit(); }
@@ -773,6 +774,23 @@ export default function App(){
     setQuoteClip(c); try{ localStorage.setItem("burQuoteClip",JSON.stringify(c)); }catch{} toast_(`⧉ Copied ${label||c.supplier} — open another item's Cost Data and click 📋 Paste, or tick items and use "Paste quote"`); };
   const pasteQuoteToForm=()=>{ const c=quoteClip; if(!c)return; if(c.component&&c.component!==cType)setCType(c.component);
     setCForm(f=>({...f,supplier:c.supplier,rate:c.expr||String(c.rate??""),date:c.date,location:c.location,note:c.note})); toast_("📋 Pasted — check the details, then Add Entry"); };
+  // Copy the ticked BUR items (everything: rates, build-up, quotes, photos, category, sub-category) into another project.
+  // Codes that already exist there can be replaced or skipped. One Undo reverses the whole copy.
+  const copyToProject=async tpid=>{ const ids=[...selBur]; if(!ids.length||!tpid||tpid===pid)return;
+    const tname=(projects||[]).find(x=>x.id===tpid)?.name||"that project";
+    const src=ids.map(id=>burItemsRef.current.find(x=>x.id===id)).filter(Boolean);
+    try{ toast_("⏳ Checking "+tname+"…");
+      const snap=await getDocs(query(collection(db,"bur"),where("pid","==",tpid))); const there=snap.docs.map(d=>({id:d.id,...d.data()}));
+      const pairs=src.map(b=>({b,t:b.code?findBurByCode(there,b.code):null})); const exist=pairs.filter(x=>x.t), fresh=pairs.filter(x=>!x.t);
+      if(!confirm(`Copy ${src.length} item(s) to "${tname}"?\n\n• ${fresh.length} new${exist.length?`\n• ${exist.length} already there (same code)`:""}\n\nEverything is copied: rates, quotes, photos, category & sub-category. You can Undo.`))return;
+      let replace=false; if(exist.length) replace=confirm(`${exist.length} of these codes already exist in "${tname}".\n\nOK = replace them with these versions\nCancel = leave them as they are (skip)`);
+      const strip=b=>{ const {id:_i,...data}=JSON.parse(JSON.stringify(b)); return {...data,pid:tpid}; };
+      const newIds=[], before=[];
+      const writes=[...fresh.map(x=>({ref:doc(collection(db,"bur")),data:strip(x.b),isNew:true})),...(replace?exist.map(x=>({ref:doc(db,"bur",x.t.id),data:strip(x.b),old:x.t})):[])];
+      for(let i=0;i<writes.length;i+=400){ const batch=writeBatch(db); writes.slice(i,i+400).forEach(w=>{ batch.set(w.ref,w.data); if(w.isNew)newIds.push(w.ref.id); else { const {id:_i,...o}=w.old; before.push({id:w.ref.id,before:o}); } }); await batch.commit(); }
+      pushUndo({kind:"multi",label:`Copy ${writes.length} item(s) to ${tname}`,parts:[...(before.length?[{kind:"restore",docs:before.map(x=>({id:x.id,data:x.before}))}]:[]),...(newIds.length?[{kind:"created",ids:newIds}]:[])]});
+      toast_(`✅ Copied to ${tname}: ${newIds.length} added${before.length?`, ${before.length} replaced`:""}${exist.length&&!replace?`, ${exist.length} skipped`:""}`); clearSel();
+    }catch(e){ toast_("⚠️ Copy failed: "+(e&&e.message||e)); } };
   const pasteQuoteToItems=async()=>{ const c=quoteClip, ids=[...selBur]; if(!c||!ids.length)return;
     if(!confirm(`Add this quote to ${ids.length} item(s)?\n\n${c.supplier} · S$ ${c.expr||c.rate}${c.date?" · "+c.date:""}${c.location?" · "+c.location:""}\n\nIt is added as a new Cost Data row (not ticked into the rate). You can Undo.`))return;
     recordFields(ids,["costData"],`Paste quote to ${ids.length} item(s)`);
@@ -1381,6 +1399,7 @@ You can bring them back with the Undo button (until you refresh the page).`))ret
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetDiscount(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Discount…</option>{[2,5,10,15].map(m=><option key={m} value={m}>{m}%</option>)}<option value="__custom">Other %…</option><option value="0">None (0%)</option></select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetWaste(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Waste/ OH…</option>{[5,10,15,20].map(m=><option key={m} value={m}>{m}%</option>)}<option value="__custom">Other %…</option><option value="0">None (0%)</option></select>
                 <select value="none" onChange={e=>{if(e.target.value!=="none")bulkSetRound(e.target.value);}} style={{border:"1px solid #c4b5fd",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#fff"}}><option value="none">Round up…</option>{ROUND_OPTS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
+                {(projects||[]).length>1&&<select value="" onChange={e=>{ if(e.target.value)copyToProject(e.target.value); }} title="Copy the ticked items to another project" style={{border:"1px solid #0e7490",borderRadius:6,padding:"4px 8px",fontSize:12,outline:"none",background:"#ecfeff",color:"#0e7490",fontWeight:700,maxWidth:200}}><option value="">⇢ Copy to project…</option>{(projects||[]).filter(x=>x.id!==pid).map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>}
                 {quoteClip&&<button onClick={pasteQuoteToItems} title={"Add the copied quote row to every ticked item: "+[quoteClip.supplier,quoteClip.expr||quoteClip.rate,quoteClip.date,quoteClip.location].filter(Boolean).join(" · ")} style={{background:"#0e7490",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>📋 Paste quote to {selBur.size}</button>}
                 <button onClick={()=>copyItems([...selBur])} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>⧉ Copy {selBur.size}</button>
                 <button onClick={bulkDelete} style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700}}>🗑 Delete {selBur.size}</button>
